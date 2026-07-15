@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Doom CE Level Workshop</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="appvar.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">DCE</span>
+      <div>
+        <h1>Level Workshop</h1>
+        <p>TI-84 Plus CE sector builder</p>
+      </div>
+    </div>
+    <div class="file-actions">
+      <label class="button secondary" for="import-file">Import</label>
+      <input id="import-file" type="file" accept=".json,.dcl,.8xv,application/json,application/octet-stream">
+      <button id="export-json" class="button secondary" type="button">Export JSON</button>
+      <button id="export-dcl" class="button secondary" type="button">Export DCE1</button>
+      <button id="export-8xv" class="button primary" type="button">Export .8xv</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="stage-panel" aria-label="Top-down level canvas">
+      <div class="stage-toolbar">
+        <div class="tool-group">
+          <button id="select-tool" class="tool active" type="button">Select / drag</button>
+          <button id="spawn-tool" class="tool" type="button">Place spawn</button>
+          <button id="add-room" class="tool" type="button">Add room</button>
+        </div>
+        <div class="legend" aria-label="Canvas legend">
+          <span><i class="swatch wall"></i> solid</span>
+          <span><i class="swatch doorway"></i> neighbor</span>
+          <span><i class="swatch portal"></i> portal pair</span>
+        </div>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="level-canvas" width="1080" height="680"></canvas>
+        <div class="canvas-help">Drag vertices · click walls to inspect · wheel to zoom</div>
+      </div>
+      <footer class="statusbar">
+        <span id="status-message">Ready.</span>
+        <span id="level-stats"></span>
+      </footer>
+    </section>
+
+    <aside class="inspector">
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Selection</p>
+            <h2 id="selection-title">Sector 1</h2>
+          </div>
+          <span id="selection-badge" class="badge">ROOM</span>
+        </div>
+
+        <label>
+          Sector name
+          <input id="sector-name" type="text" maxlength="24">
+        </label>
+        <div class="field-grid">
+          <label>
+            Floor height
+            <input id="floor-height" type="number" min="-32" max="31.996" step="0.25">
+          </label>
+          <label>
+            Ceiling height
+            <input id="ceiling-height" type="number" min="-32" max="31.996" step="0.25">
+          </label>
+          <label>
+            Floor color
+            <input id="floor-color" type="number" min="0" max="255" step="1">
+          </label>
+          <label>
+            Ceiling color
+            <input id="ceiling-color" type="number" min="0" max="255" step="1">
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading compact">
+          <div>
+            <p class="eyebrow">Wall edge</p>
+            <h2 id="wall-title">No wall selected</h2>
+          </div>
+        </div>
+        <div class="field-grid">
+          <label>
+            Wall color
+            <input id="wall-color" type="number" min="0" max="255" step="1" disabled>
+          </label>
+          <label class="check-field">
+            <input id="portal-capable" type="checkbox" disabled>
+            Portal-capable
+          </label>
+        </div>
+        <div class="button-stack">
+          <button id="mark-neighbor" class="button secondary wide" type="button" disabled>Mark doorway side A</button>
+          <button id="link-neighbor" class="button secondary wide" type="button" disabled>Link selected wall to A</button>
+          <button id="mark-portal" class="button secondary wide" type="button" disabled>Mark portal wall A</button>
+          <button id="link-portal" class="button accent wide" type="button" disabled>Pair selected wall with A</button>
+          <button id="clear-portals" class="text-button" type="button">Clear all portal pairs</button>
+        </div>
+        <p class="note">Doorway edges must overlap in reverse directions. Portal walls may have any horizontal angle, but must be at least 1.5 units wide and 2 units tall.</p>
+      </section>
+
+      <section class="panel limits">
+        <p class="eyebrow">DCE1 limits</p>
+        <div class="meter-row"><span>Vertices</span><strong id="vertex-limit">0 / 64</strong></div>
+        <div class="meter-row"><span>Edges</span><strong id="edge-limit">0 / 96</strong></div>
+        <div class="meter-row"><span>Sectors</span><strong id="sector-limit">0 / 16</strong></div>
+        <div class="meter-row"><span>Portals</span><strong id="portal-limit">0 / 16</strong></div>
+      </section>
+    </aside>
+  </main>
+</body>
+</html>
