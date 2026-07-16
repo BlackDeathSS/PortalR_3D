@@ -37,6 +37,6 @@ uint8_t game_update(
     uint24_t elapsed_ticks,
     uint24_t ticks_per_second
 );
-void game_render(const GameState *game);
+void game_render(const GameState *game, uint8_t fps);
 
 #endif
