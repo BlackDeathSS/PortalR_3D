@@ -73,7 +73,6 @@ int main(void) {
         if ((kb_Data[1] & kb_Graph) != 0) buttons |= ENGINE_BUTTON_DEV_MODE;
         if ((kb_Data[1] & kb_Del) != 0) buttons |= ENGINE_BUTTON_FLY_DOWN;
         if ((kb_Data[1] & kb_Zoom) != 0) buttons |= ENGINE_BUTTON_RESOLUTION;
-        if ((kb_Data[1] & kb_Trace) != 0) buttons |= ENGINE_BUTTON_RECURSION;
 
         if (accumulated_ticks >= update_ticks) {
             uint8_t changed = engine_update(

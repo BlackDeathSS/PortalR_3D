@@ -11,7 +11,6 @@
 #define ENGINE_BUTTON_DEV_MODE (1u << 3)
 #define ENGINE_BUTTON_FLY_DOWN (1u << 4)
 #define ENGINE_BUTTON_RESOLUTION (1u << 5)
-#define ENGINE_BUTTON_RECURSION (1u << 6)
 
 typedef int24_t fixed_t;
 
@@ -33,8 +32,7 @@ typedef struct {
     uint8_t previous_buttons;
     uint8_t grounded;
     uint8_t dev_mode;
-    uint8_t render_mode;
-    uint8_t portal_recursion;
+    uint8_t render_shift;
 } EngineState;
 
 _Static_assert(sizeof(EngineState) <= 64u, "True-3D player state exceeded 64 bytes");
