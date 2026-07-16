@@ -920,45 +920,27 @@ static uint8_t portal_ring_thickness(uint8_t top, uint8_t bottom) {
     return bottom - top >= 8 ? 2 : 1;
 }
 
-static void draw_wall_clipped(const RayHit *ray, uint24_t x, uint8_t clip_start, uint8_t clip_end) {
-    WallContext context = wall_context(ray);
-
-    if (context.start < clip_start) context.start = clip_start;
-    if (context.end > clip_end) context.end = clip_end;
-    draw_span(x, context.start, context.end, wall_color(ray));
+static void draw_span_clipped(
+    uint24_t x,
+    uint8_t start,
+    uint8_t end,
+    uint8_t color,
+    uint8_t clip_start,
+    uint8_t clip_end
+) {
+    if (start < clip_start) start = clip_start;
+    if (end > clip_end) end = clip_end;
+    draw_span(x, start, end, color);
 }
 
-static void draw_portal_ring(const RayHit *ray, uint24_t x) {
-    WallContext context;
-    uint8_t top;
-    uint8_t bottom;
-    uint8_t top_end;
-    uint8_t bottom_start;
-    uint8_t thickness;
-    uint8_t color;
-
-    if (ray->portal_kind == PORTAL_NONE) {
-        return;
-    }
-
-    context = wall_context(ray);
-    portal_opening(ray, &context, &top, &bottom);
-    color = portal_color(ray->portal_kind);
-    thickness = portal_ring_thickness(top, bottom);
-    top_end = (uint8_t)(top + thickness);
-    if (top_end > context.end) top_end = context.end;
-
-    if (bottom <= top + thickness) {
-        draw_span(x, top, top_end, color);
-        return;
-    }
-    bottom_start = (uint8_t)(bottom - thickness);
-    if (bottom_start < context.start) bottom_start = context.start;
-    draw_span(x, top, top_end, color);
-    draw_span(x, bottom_start, bottom, color);
-}
-
-static void draw_portal_mask(const RayHit *ray, uint24_t x) {
+static void draw_portal_layer_front(
+    const RayHit *ray,
+    uint24_t x,
+    uint8_t clip_start,
+    uint8_t clip_end,
+    uint8_t *inner_start,
+    uint8_t *inner_end
+) {
     WallContext context = wall_context(ray);
     uint8_t top;
     uint8_t bottom;
@@ -972,18 +954,63 @@ static void draw_portal_mask(const RayHit *ray, uint24_t x) {
     thickness = portal_ring_thickness(top, bottom);
     top_end = (uint8_t)(top + thickness);
     if (top_end > context.end) top_end = context.end;
+
+    if (context.start < clip_start) context.start = clip_start;
+    if (context.end > clip_end) context.end = clip_end;
+
     if (bottom <= top + thickness) {
-        draw_span(x, context.start, context.end, wall);
-        draw_span(x, top, top_end, ring);
+        draw_span_clipped(x, context.start, context.end, wall, clip_start, clip_end);
+        draw_span_clipped(x, top, top_end, ring, clip_start, clip_end);
+        *inner_start = clip_end;
+        *inner_end = clip_start;
         return;
     }
 
     bottom_start = (uint8_t)(bottom - thickness);
     if (bottom_start < context.start) bottom_start = context.start;
-    draw_span(x, context.start, top, wall);
-    draw_span(x, top, top_end, ring);
-    draw_span(x, bottom_start, bottom, ring);
-    draw_span(x, bottom, context.end, wall);
+
+    draw_span_clipped(x, context.start, top, wall, clip_start, clip_end);
+    draw_span_clipped(x, top, top_end, ring, clip_start, clip_end);
+    draw_span_clipped(x, bottom_start, bottom, ring, clip_start, clip_end);
+    draw_span_clipped(x, bottom, context.end, wall, clip_start, clip_end);
+
+    *inner_start = top_end > clip_start ? top_end : clip_start;
+    *inner_end = bottom_start < clip_end ? bottom_start : clip_end;
+}
+
+static void draw_terminal_layer_clipped(
+    const RayHit *ray,
+    uint24_t x,
+    uint8_t clip_start,
+    uint8_t clip_end
+) {
+    WallContext context = wall_context(ray);
+
+    if (context.start < clip_start) context.start = clip_start;
+    if (context.end > clip_end) context.end = clip_end;
+    draw_span(x, context.start, context.end, wall_color(ray));
+
+    if (ray->portal_kind != PORTAL_NONE) {
+        WallContext ring_context = wall_context(ray);
+        uint8_t top;
+        uint8_t bottom;
+        uint8_t top_end;
+        uint8_t bottom_start;
+        uint8_t thickness;
+        uint8_t ring = portal_color(ray->portal_kind);
+
+        portal_opening(ray, &ring_context, &top, &bottom);
+        thickness = portal_ring_thickness(top, bottom);
+        top_end = (uint8_t)(top + thickness);
+        if (top_end > ring_context.end) top_end = ring_context.end;
+        if (bottom <= top + thickness) {
+            draw_span_clipped(x, top, top_end, ring, clip_start, clip_end);
+            return;
+        }
+        bottom_start = (uint8_t)(bottom - thickness);
+        draw_span_clipped(x, top, top_end, ring, clip_start, clip_end);
+        draw_span_clipped(x, bottom_start, bottom, ring, clip_start, clip_end);
+    }
 }
 
 static void render_column(
@@ -1004,6 +1031,7 @@ static void render_column(
     uint8_t clip_start = 0;
     uint8_t clip_end = GFX_LCD_HEIGHT;
     uint8_t terminal_open = 0;
+    uint8_t depth;
 
     while (count < portal_depth_limit) {
         Portal exit;
@@ -1062,16 +1090,41 @@ static void render_column(
         map_y = exit.y;
     }
 
-    if (terminal_open) {
-        draw_portal_mask(&render_scratch.layers[count - 1], x);
-    } else {
-        draw_wall_clipped(&render_scratch.layers[count - 1], x, clip_start, clip_end);
-        draw_portal_ring(&render_scratch.layers[count - 1], x);
+    clip_start = 0;
+    clip_end = GFX_LCD_HEIGHT;
+    for (depth = 0; depth + 1 < count; ++depth) {
+        uint8_t inner_start;
+        uint8_t inner_end;
+
+        draw_portal_layer_front(
+            &render_scratch.layers[depth],
+            x,
+            clip_start,
+            clip_end,
+            &inner_start,
+            &inner_end
+        );
+        if (inner_end <= inner_start) {
+            return;
+        }
+        clip_start = inner_start;
+        clip_end = inner_end;
     }
 
-    while (count > 1) {
-        --count;
-        draw_portal_mask(&render_scratch.layers[count - 1], x);
+    if (terminal_open) {
+        uint8_t inner_start;
+        uint8_t inner_end;
+
+        draw_portal_layer_front(
+            &render_scratch.layers[count - 1],
+            x,
+            clip_start,
+            clip_end,
+            &inner_start,
+            &inner_end
+        );
+    } else {
+        draw_terminal_layer_clipped(&render_scratch.layers[count - 1], x, clip_start, clip_end);
     }
 }
 
