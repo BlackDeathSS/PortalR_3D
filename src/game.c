@@ -839,12 +839,21 @@ static void draw_floor_grid(
 }
 
 static void draw_span(uint24_t x, uint8_t start, uint8_t end, uint8_t color) {
+    uint8_t *row;
+
     if (end <= start) {
         return;
     }
 
-    gfx_SetColor(color);
-    gfx_FillRectangle_NoClip(x, start, COLUMN_WIDTH, (uint8_t)(end - start));
+    row = &gfx_vbuffer[start][x];
+    do {
+        row[0] = color;
+        row[1] = color;
+        row[2] = color;
+        row[3] = color;
+        row += GFX_LCD_WIDTH;
+        ++start;
+    } while (start < end);
 }
 
 static void portal_opening(const RayHit *ray, const WallContext *context, uint8_t *top, uint8_t *bottom) {
