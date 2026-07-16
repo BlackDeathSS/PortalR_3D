@@ -13,8 +13,6 @@
 #define FLOOR_NEAR_DISTANCE (FIXED_ONE + 4)
 #define FLOOR_FAR_DISTANCE (FIXED_ONE * 16)
 #define FLOOR_PROJECT_LIMIT 4096
-#define FLOOR_GRID_RADIUS 16
-#define FLOOR_GRID_MIN_SCREEN_GAP 4
 #define WALL_HEIGHT_TABLE_SHIFT 2
 #define WALL_HEIGHT_TABLE_SIZE 2048
 #define WALL_HEIGHT_FAR 7
@@ -732,11 +730,7 @@ static void draw_floor_grid(
     uint8_t far_screen_y = ceiling
         ? (uint8_t)(GFX_LCD_HEIGHT / 2 - far_height / 2)
         : (uint8_t)(GFX_LCD_HEIGHT / 2 + far_height / 2);
-    int8_t line;
-    int16_t base_grid_x = game->player_x / FIXED_ONE;
-    int16_t base_grid_y = game->player_y / FIXED_ONE;
-    int24_t last_x_screen_y = -FLOOR_PROJECT_LIMIT;
-    int24_t last_y_screen_y = -FLOOR_PROJECT_LIMIT;
+    uint8_t line;
 
     if (!ceiling) {
         gfx_SetColor(COLOR_FLOOR);
@@ -745,8 +739,8 @@ static void draw_floor_grid(
     gfx_SetColor(ceiling ? COLOR_SKY_HORIZON : COLOR_FLOOR_NEAR);
 
     /* Project the map's world-space X and Y grid lines into camera space. */
-    for (line = -FLOOR_GRID_RADIUS; line <= FLOOR_GRID_RADIUS; ++line) {
-        fixed_t grid_x = (fixed_t)(base_grid_x + line) * FIXED_ONE;
+    for (line = 0; line <= MAP_WIDTH; ++line) {
+        fixed_t grid_x = (fixed_t)line * FIXED_ONE;
 
         if (direction_y_value == 0) {
             fixed_t distance = fixed_mul(grid_x - game->player_x, inverse_x);
@@ -757,13 +751,8 @@ static void draw_floor_grid(
                     ? GFX_LCD_HEIGHT / 2 - wall_height_for_distance(distance) / 2
                     : GFX_LCD_HEIGHT / 2 + wall_height_for_distance(distance) / 2;
 
-                if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT &&
-                    (last_x_screen_y < 0 ||
-                    (screen_y > last_x_screen_y
-                        ? screen_y - last_x_screen_y
-                        : last_x_screen_y - screen_y) >= FLOOR_GRID_MIN_SCREEN_GAP)) {
+                if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT) {
                     gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
-                    last_x_screen_y = screen_y;
                 }
             }
         } else {
@@ -799,8 +788,8 @@ static void draw_floor_grid(
         }
     }
 
-    for (line = -FLOOR_GRID_RADIUS; line <= FLOOR_GRID_RADIUS; ++line) {
-        fixed_t grid_y = (fixed_t)(base_grid_y + line) * FIXED_ONE;
+    for (line = 0; line <= MAP_HEIGHT; ++line) {
+        fixed_t grid_y = (fixed_t)line * FIXED_ONE;
 
         if (direction_x_value == 0) {
             fixed_t distance = fixed_mul(grid_y - game->player_y, inverse_y);
@@ -811,13 +800,8 @@ static void draw_floor_grid(
                     ? GFX_LCD_HEIGHT / 2 - wall_height_for_distance(distance) / 2
                     : GFX_LCD_HEIGHT / 2 + wall_height_for_distance(distance) / 2;
 
-                if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT &&
-                    (last_y_screen_y < 0 ||
-                    (screen_y > last_y_screen_y
-                        ? screen_y - last_y_screen_y
-                        : last_y_screen_y - screen_y) >= FLOOR_GRID_MIN_SCREEN_GAP)) {
+                if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT) {
                     gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
-                    last_y_screen_y = screen_y;
                 }
             }
         } else {
