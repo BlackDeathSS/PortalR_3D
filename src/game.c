@@ -17,6 +17,9 @@
 #define WALL_HEIGHT_TABLE_SIZE 2048
 #define WALL_HEIGHT_FAR 7
 #define MAX_PORTAL_DEPTH 12
+#ifndef PERF_HUD
+#define PERF_HUD 0
+#endif
 #define PORTAL_RECURSE_MIN_HEIGHT 3
 #define PLAYER_RADIUS 44
 #define FIELD_OF_VIEW 169
@@ -92,7 +95,18 @@ typedef struct {
     RayHit layers[MAX_PORTAL_DEPTH];
 } RenderScratch;
 
+typedef struct {
+    uint8_t rendered_columns;
+    uint16_t cast_wall_calls;
+    uint16_t dda_steps;
+    uint16_t portal_layers;
+    uint16_t draw_span_calls;
+    uint16_t span_rows_written;
+    uint16_t floor_grid_line_draws;
+} FrameProfiler;
+
 static RenderScratch render_scratch;
+static FrameProfiler frame_profiler;
 static uint16_t wall_height_table[WALL_HEIGHT_TABLE_SIZE];
 
 _Static_assert(sizeof(RenderScratch) <= 256u, "Render scratch exceeded its RAM budget");
@@ -357,6 +371,8 @@ static void cast_wall(
     fixed_t side_y;
     fixed_t wall_position;
 
+    ++frame_profiler.cast_wall_calls;
+
     hit->step_x = ray_x < 0 ? -1 : 1;
     hit->step_y = ray_y < 0 ? -1 : 1;
 
@@ -385,6 +401,7 @@ static void cast_wall(
     }
 
     do {
+        ++frame_profiler.dda_steps;
         if (side_x < side_y) {
             side_x += delta_x;
             map_x += hit->step_x;
@@ -706,6 +723,7 @@ static void draw_grid_segment(
     } else {
         gfx_Line(far_x, far_y, near_x, near_y);
     }
+    ++frame_profiler.floor_grid_line_draws;
 }
 
 static void draw_floor_grid(
@@ -753,6 +771,7 @@ static void draw_floor_grid(
 
                 if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT) {
                     gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
+                    ++frame_profiler.floor_grid_line_draws;
                 }
             }
         } else {
@@ -802,6 +821,7 @@ static void draw_floor_grid(
 
                 if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT) {
                     gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
+                    ++frame_profiler.floor_grid_line_draws;
                 }
             }
         } else {
@@ -844,6 +864,9 @@ static void draw_span(uint24_t x, uint8_t start, uint8_t end, uint8_t color) {
     if (end <= start) {
         return;
     }
+
+    ++frame_profiler.draw_span_calls;
+    frame_profiler.span_rows_written += (uint16_t)(end - start);
 
     row = &gfx_vbuffer[start][x];
     do {
@@ -986,6 +1009,7 @@ static void render_column(
         );
         hit->portal_kind = kind;
         ++count;
+        ++frame_profiler.portal_layers;
 
         if (!has_exit) {
             break;
@@ -1164,6 +1188,34 @@ static void draw_hud_glyph(uint8_t glyph, uint8_t x, uint8_t y) {
     }
 }
 
+
+#if PERF_HUD
+static void draw_hud_number(uint16_t value, uint8_t x, uint8_t y) {
+    if (value > 999) value = 999;
+    draw_hud_glyph((uint8_t)(3 + value / 100u), x, y);
+    draw_hud_glyph((uint8_t)(3 + (value / 10u) % 10u), (uint8_t)(x + 4), y);
+    draw_hud_glyph((uint8_t)(3 + value % 10u), (uint8_t)(x + 8), y);
+}
+
+static void draw_profiler_hud(void) {
+    uint8_t row;
+
+    gfx_SetColor(COLOR_BLACK);
+    for (row = 10; row < 46; ++row) {
+        gfx_HorizLine_NoClip(0, row, 80);
+    }
+
+    /* PERF_HUD layout: columns, casts, DDA steps, layers, spans, rows/10, grid lines. */
+    draw_hud_number(frame_profiler.rendered_columns, 2, 12);
+    draw_hud_number(frame_profiler.cast_wall_calls, 18, 12);
+    draw_hud_number(frame_profiler.dda_steps, 34, 12);
+    draw_hud_number(frame_profiler.portal_layers, 50, 12);
+    draw_hud_number(frame_profiler.draw_span_calls, 2, 22);
+    draw_hud_number(frame_profiler.span_rows_written / 10u, 18, 22);
+    draw_hud_number(frame_profiler.floor_grid_line_draws, 34, 22);
+}
+#endif
+
 static void draw_fps_counter(uint8_t fps) {
     uint8_t row;
 
@@ -1188,6 +1240,14 @@ void game_render(const GameState *game, uint8_t fps) {
     uint8_t player_map_y = (uint8_t)(game->player_y / FIXED_ONE);
     uint24_t column;
 
+    frame_profiler.rendered_columns = 0;
+    frame_profiler.cast_wall_calls = 0;
+    frame_profiler.dda_steps = 0;
+    frame_profiler.portal_layers = 0;
+    frame_profiler.draw_span_calls = 0;
+    frame_profiler.span_rows_written = 0;
+    frame_profiler.floor_grid_line_draws = 0;
+
     direction_for_angle(game->angle, &dir_x, &dir_y);
     plane_x = -fixed_mul_camera(dir_y, FIELD_OF_VIEW);
     plane_y = fixed_mul_camera(dir_x, FIELD_OF_VIEW);
@@ -1204,6 +1264,8 @@ void game_render(const GameState *game, uint8_t fps) {
         fixed_t camera_x = camera_x_by_column[column];
         fixed_t ray_x = dir_x + fixed_mul_camera(plane_x, camera_x);
         fixed_t ray_y = dir_y + fixed_mul_camera(plane_y, camera_x);
+
+        ++frame_profiler.rendered_columns;
         render_column(
             game,
             column * COLUMN_WIDTH,
@@ -1215,4 +1277,7 @@ void game_render(const GameState *game, uint8_t fps) {
     }
 
     draw_fps_counter(fps);
+#if PERF_HUD
+    draw_profiler_hud();
+#endif
 }
