@@ -18,7 +18,7 @@
 #define WALL_HEIGHT_FAR 7
 #define MAX_PORTAL_DEPTH 12
 #ifndef PERF_HUD
-#define PERF_HUD 0
+#define PERF_HUD 1
 #endif
 #define PORTAL_RECURSE_MIN_HEIGHT 3
 #define PLAYER_RADIUS 44
