@@ -8,8 +8,16 @@
 
 #define MAP_WIDTH 15
 #define MAP_HEIGHT 15
-#define LOGICAL_COLUMNS 80
-#define COLUMN_WIDTH 4
+#define LOGICAL_COLUMNS 96
+#define COLUMN_WIDTH 3
+#define VIEWPORT_WIDTH (LOGICAL_COLUMNS * COLUMN_WIDTH)
+#define VIEWPORT_X ((GFX_LCD_WIDTH - VIEWPORT_WIDTH) / 2)
+#define WALL_TEXTURE_SIZE 16
+#define WALL_TEXTURE_MASK (WALL_TEXTURE_SIZE - 1)
+#define WALL_TEXTURE_SHIFT 4
+#define WALL_TEXTURE_COUNT 1
+#define WALL_BASE_COLOR_COUNT 8
+#define WALL_SHADE_LEVELS 4
 #define FLOOR_NEAR_DISTANCE (FIXED_ONE + 4)
 #define FLOOR_FAR_DISTANCE (FIXED_ONE * 16)
 #define FLOOR_PROJECT_LIMIT 4096
@@ -57,7 +65,10 @@ enum ColorIndex {
     COLOR_WEST_DARK = 12,
     COLOR_PRIMARY = 13,
     COLOR_SECONDARY = 14,
-    COLOR_BUILTIN = 15
+    COLOR_BUILTIN = 15,
+    COLOR_CEILING = 16,
+    COLOR_CEILING_NEAR = 17,
+    COLOR_TEXTURE_BASE = 18
 };
 
 typedef struct {
@@ -93,10 +104,15 @@ typedef struct {
 
 static RenderScratch render_scratch;
 static uint16_t wall_height_table[WALL_HEIGHT_TABLE_SIZE];
+static int16_t camera_x_by_column[LOGICAL_COLUMNS];
+static uint8_t wall_textures[WALL_TEXTURE_COUNT][WALL_TEXTURE_SIZE * WALL_TEXTURE_SIZE];
+static uint8_t wall_shade_table[WALL_SHADE_LEVELS][WALL_BASE_COLOR_COUNT];
 
 _Static_assert(sizeof(RenderScratch) <= 256u, "Render scratch exceeded its RAM budget");
 _Static_assert(
-    sizeof(GameState) + sizeof(RenderScratch) + sizeof(wall_height_table) + 4096u < 32u * 1024u,
+    sizeof(GameState) + sizeof(RenderScratch) + sizeof(wall_height_table) +
+        sizeof(camera_x_by_column) + sizeof(wall_textures) + sizeof(wall_shade_table) +
+        4096u < 32u * 1024u,
     "Static state plus the reserved CEdev stack exceeds 32 KiB"
 );
 
@@ -124,15 +140,6 @@ static const uint8_t wall_map[16 * 16] = {
 static const uint8_t builtin_portal_by_tile[16 * 16] = {
     [3] = 10, [5] = 5, [7] = 6, [32] = 9, [64] = 3,
     [94] = 7, [110] = 8, [149] = 4, [208] = 1, [213] = 2
-};
-
-/* 2*x/80-1 in 8.8 fixed point; removes a division from every wall column. */
-static const int16_t camera_x_by_column[LOGICAL_COLUMNS] = {
-    -256, -250, -244, -237, -231, -224, -218, -212, -205, -199, -192, -186, -180, -173, -167, -160,
-    -154, -148, -141, -135, -128, -122, -116, -109, -103, -96, -90, -84, -77, -71, -64, -58,
-    -52, -45, -39, -32, -26, -20, -13, -7, 0, 6, 12, 19, 25, 32, 38, 44,
-    51, 57, 64, 70, 76, 83, 89, 96, 102, 108, 115, 121, 128, 134, 140, 147,
-    153, 160, 166, 172, 179, 185, 192, 198, 204, 211, 217, 224, 230, 236, 243, 249
 };
 
 /* 65536/component for every possible 8.8 ray component. */
@@ -341,23 +348,23 @@ static void rotate_quarter(fixed_t *x, fixed_t *y, int8_t quarters) {
     }
 }
 
-static RayHit cast_wall(
+static void cast_wall(
     fixed_t origin_x,
     fixed_t origin_y,
     fixed_t ray_x,
     fixed_t ray_y,
     int24_t map_x,
-    int24_t map_y
+    int24_t map_y,
+    RayHit *hit
 ) {
-    RayHit hit;
     fixed_t delta_x;
     fixed_t delta_y;
     fixed_t side_x;
     fixed_t side_y;
     fixed_t wall_position;
 
-    hit.step_x = ray_x < 0 ? -1 : 1;
-    hit.step_y = ray_y < 0 ? -1 : 1;
+    hit->step_x = ray_x < 0 ? -1 : 1;
+    hit->step_y = ray_y < 0 ? -1 : 1;
 
     if (ray_x == 0) {
         delta_x = FIXED_INF;
@@ -386,33 +393,32 @@ static RayHit cast_wall(
     do {
         if (side_x < side_y) {
             side_x += delta_x;
-            map_x += hit.step_x;
-            hit.side = 0;
+            map_x += hit->step_x;
+            hit->side = 0;
         } else {
             side_y += delta_y;
-            map_y += hit.step_y;
-            hit.side = 1;
+            map_y += hit->step_y;
+            hit->side = 1;
         }
     } while (!map_is_wall(map_x, map_y));
 
-    if (hit.side == 0) {
-        hit.distance = side_x - delta_x;
-        hit.wall_direction = ray_x >= 0 ? DIR_NORTH : DIR_SOUTH;
-        wall_position = origin_y + fixed_mul(hit.distance, ray_y);
+    if (hit->side == 0) {
+        hit->distance = side_x - delta_x;
+        hit->wall_direction = ray_x >= 0 ? DIR_NORTH : DIR_SOUTH;
+        wall_position = origin_y + fixed_mul(hit->distance, ray_y);
     } else {
-        hit.distance = side_y - delta_y;
-        hit.wall_direction = ray_y >= 0 ? DIR_WEST : DIR_EAST;
-        wall_position = origin_x + fixed_mul(hit.distance, ray_x);
+        hit->distance = side_y - delta_y;
+        hit->wall_direction = ray_y >= 0 ? DIR_WEST : DIR_EAST;
+        wall_position = origin_x + fixed_mul(hit->distance, ray_x);
     }
 
-    if (hit.distance < 1) {
-        hit.distance = 1;
+    if (hit->distance < 1) {
+        hit->distance = 1;
     }
-    hit.map_x = (uint8_t)map_x;
-    hit.map_y = (uint8_t)map_y;
-    hit.wall_u = (uint8_t)(wall_position & 0xFF);
-    hit.portal_kind = PORTAL_NONE;
-    return hit;
+    hit->map_x = (uint8_t)map_x;
+    hit->map_y = (uint8_t)map_y;
+    hit->wall_u = (uint8_t)(wall_position & 0xFF);
+    hit->portal_kind = PORTAL_NONE;
 }
 
 static void transform_ray(
@@ -600,10 +606,12 @@ static void place_portal(GameState *game, uint8_t primary) {
     direction_for_angle(game->angle, &ray_x, &ray_y);
 
     for (depth = 0; depth < MAX_PORTAL_DEPTH; ++depth) {
-        RayHit hit = cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y);
+        RayHit hit;
         Portal exit;
         uint8_t kind;
         uint8_t portal_id;
+
+        cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y, &hit);
 
         if (portal_find_exit(
             game,
@@ -671,14 +679,58 @@ static WallContext wall_context(const RayHit *ray) {
     return context;
 }
 
-static uint8_t wall_color(const RayHit *ray) {
-    uint8_t dark = ray->side != 0;
+static uint8_t wall_shade_level(const RayHit *ray) {
+    uint8_t shade = ray->side != 0 ? 1 : 0;
 
-    switch (ray->wall_direction) {
-        case DIR_NORTH: return dark ? COLOR_NORTH_DARK : COLOR_NORTH;
-        case DIR_SOUTH: return dark ? COLOR_SOUTH_DARK : COLOR_SOUTH;
-        case DIR_EAST: return dark ? COLOR_EAST_DARK : COLOR_EAST;
-        default: return dark ? COLOR_WEST_DARK : COLOR_WEST;
+    if (ray->distance > FIXED_ONE * 8) {
+        shade += 2;
+    } else if (ray->distance > FIXED_ONE * 4) {
+        shade += 1;
+    }
+    if (shade >= WALL_SHADE_LEVELS) {
+        shade = WALL_SHADE_LEVELS - 1;
+    }
+    return shade;
+}
+
+static uint8_t wall_texture_x(const RayHit *ray) {
+    uint8_t texture_x = (uint8_t)(ray->wall_u >> WALL_TEXTURE_SHIFT);
+
+    if ((ray->side == 0 && ray->step_x > 0) ||
+        (ray->side != 0 && ray->step_y < 0)) {
+        texture_x = WALL_TEXTURE_MASK - texture_x;
+    }
+    return texture_x;
+}
+
+static void draw_textured_wall_segment(
+    const RayHit *ray,
+    uint24_t x,
+    uint8_t start,
+    uint8_t end,
+    const WallContext *full_context
+) {
+    const uint8_t *texture_column;
+    uint8_t shade;
+    uint24_t texture_y;
+    uint24_t texture_step;
+    uint8_t y;
+
+    if (end <= start) {
+        return;
+    }
+
+    texture_column = &wall_textures[0][(uint16_t)wall_texture_x(ray) * WALL_TEXTURE_SIZE];
+    shade = wall_shade_level(ray);
+    texture_step = ((uint24_t)WALL_TEXTURE_SIZE << 8) / full_context->full_height;
+    texture_y = (uint24_t)(start - full_context->start) * texture_step;
+
+    for (y = start; y < end; ++y) {
+        uint8_t texel = texture_column[(texture_y >> 8) & WALL_TEXTURE_MASK];
+
+        gfx_SetColor(wall_shade_table[shade][texel]);
+        gfx_HorizLine_NoClip(x, y, COLUMN_WIDTH);
+        texture_y += texture_step;
     }
 }
 
@@ -827,6 +879,126 @@ static void draw_floor_grid(
     }
 }
 
+static void draw_ceiling_grid(
+    const GameState *game,
+    fixed_t direction_x_value,
+    fixed_t direction_y_value
+) {
+    fixed_t inverse_x = direction_x_value == 0 ? 0 :
+        delta_for_component(direction_x_value);
+    fixed_t inverse_y = direction_y_value == 0 ? 0 :
+        delta_for_component(direction_y_value);
+    fixed_t x_near = fixed_mul(direction_x_value, FLOOR_NEAR_DISTANCE);
+    fixed_t x_far = fixed_mul(direction_x_value, FLOOR_FAR_DISTANCE);
+    fixed_t y_near = fixed_mul(direction_y_value, FLOOR_NEAR_DISTANCE);
+    fixed_t y_far = fixed_mul(direction_y_value, FLOOR_FAR_DISTANCE);
+    uint16_t near_height = wall_height_for_distance(FLOOR_NEAR_DISTANCE);
+    uint16_t far_height = wall_height_for_distance(FLOOR_FAR_DISTANCE);
+    uint8_t near_screen_y = (uint8_t)(GFX_LCD_HEIGHT / 2 - near_height / 2);
+    uint8_t far_screen_y = (uint8_t)(GFX_LCD_HEIGHT / 2 - far_height / 2);
+    uint8_t line;
+
+    gfx_SetColor(COLOR_CEILING);
+    gfx_FillRectangle_NoClip(0, 0, GFX_LCD_WIDTH, GFX_LCD_HEIGHT / 2);
+    gfx_SetColor(COLOR_CEILING_NEAR);
+
+    for (line = 0; line <= MAP_WIDTH; ++line) {
+        fixed_t grid_x = (fixed_t)line * FIXED_ONE;
+
+        if (direction_y_value == 0) {
+            fixed_t distance = fixed_mul(grid_x - game->player_x, inverse_x);
+
+            if (direction_x_value < 0) distance = -distance;
+            if (distance >= FLOOR_NEAR_DISTANCE && distance <= FLOOR_FAR_DISTANCE) {
+                int24_t screen_y = GFX_LCD_HEIGHT / 2 -
+                    wall_height_for_distance(distance) / 2;
+
+                if (screen_y >= 0) {
+                    gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
+                }
+            }
+        } else {
+            fixed_t lateral_near = fixed_mul(
+                x_near - (grid_x - game->player_x),
+                inverse_y
+            );
+            fixed_t lateral_far = fixed_mul(
+                x_far - (grid_x - game->player_x),
+                inverse_y
+            );
+            int24_t screen_x_near;
+            int24_t screen_x_far;
+
+            if (direction_y_value < 0) {
+                lateral_near = -lateral_near;
+                lateral_far = -lateral_far;
+            }
+            screen_x_near = GFX_LCD_WIDTH / 2 +
+                ((int32_t)lateral_near * near_height >> FIXED_SHIFT);
+            screen_x_far = GFX_LCD_WIDTH / 2 +
+                ((int32_t)lateral_far * far_height >> FIXED_SHIFT);
+            if (screen_x_near < -FLOOR_PROJECT_LIMIT) screen_x_near = -FLOOR_PROJECT_LIMIT;
+            if (screen_x_near > FLOOR_PROJECT_LIMIT) screen_x_near = FLOOR_PROJECT_LIMIT;
+            if (screen_x_far < -FLOOR_PROJECT_LIMIT) screen_x_far = -FLOOR_PROJECT_LIMIT;
+            if (screen_x_far > FLOOR_PROJECT_LIMIT) screen_x_far = FLOOR_PROJECT_LIMIT;
+            draw_floor_segment(
+                screen_x_far,
+                far_screen_y,
+                screen_x_near,
+                near_screen_y
+            );
+        }
+    }
+
+    for (line = 0; line <= MAP_HEIGHT; ++line) {
+        fixed_t grid_y = (fixed_t)line * FIXED_ONE;
+
+        if (direction_x_value == 0) {
+            fixed_t distance = fixed_mul(grid_y - game->player_y, inverse_y);
+
+            if (direction_y_value < 0) distance = -distance;
+            if (distance >= FLOOR_NEAR_DISTANCE && distance <= FLOOR_FAR_DISTANCE) {
+                int24_t screen_y = GFX_LCD_HEIGHT / 2 -
+                    wall_height_for_distance(distance) / 2;
+
+                if (screen_y >= 0) {
+                    gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
+                }
+            }
+        } else {
+            fixed_t lateral_near = fixed_mul(
+                (grid_y - game->player_y) - y_near,
+                inverse_x
+            );
+            fixed_t lateral_far = fixed_mul(
+                (grid_y - game->player_y) - y_far,
+                inverse_x
+            );
+            int24_t screen_x_near;
+            int24_t screen_x_far;
+
+            if (direction_x_value < 0) {
+                lateral_near = -lateral_near;
+                lateral_far = -lateral_far;
+            }
+            screen_x_near = GFX_LCD_WIDTH / 2 +
+                ((int32_t)lateral_near * near_height >> FIXED_SHIFT);
+            screen_x_far = GFX_LCD_WIDTH / 2 +
+                ((int32_t)lateral_far * far_height >> FIXED_SHIFT);
+            if (screen_x_near < -FLOOR_PROJECT_LIMIT) screen_x_near = -FLOOR_PROJECT_LIMIT;
+            if (screen_x_near > FLOOR_PROJECT_LIMIT) screen_x_near = FLOOR_PROJECT_LIMIT;
+            if (screen_x_far < -FLOOR_PROJECT_LIMIT) screen_x_far = -FLOOR_PROJECT_LIMIT;
+            if (screen_x_far > FLOOR_PROJECT_LIMIT) screen_x_far = FLOOR_PROJECT_LIMIT;
+            draw_floor_segment(
+                screen_x_far,
+                far_screen_y,
+                screen_x_near,
+                near_screen_y
+            );
+        }
+    }
+}
+
 static void draw_span(uint24_t x, uint8_t start, uint8_t end, uint8_t color) {
     if (end <= start) {
         return;
@@ -860,10 +1032,11 @@ static uint8_t portal_ring_thickness(uint8_t top, uint8_t bottom) {
 
 static void draw_wall_clipped(const RayHit *ray, uint24_t x, uint8_t clip_start, uint8_t clip_end) {
     WallContext context = wall_context(ray);
+    WallContext clipped = context;
 
-    if (context.start < clip_start) context.start = clip_start;
-    if (context.end > clip_end) context.end = clip_end;
-    draw_span(x, context.start, context.end, wall_color(ray));
+    if (clipped.start < clip_start) clipped.start = clip_start;
+    if (clipped.end > clip_end) clipped.end = clip_end;
+    draw_textured_wall_segment(ray, x, clipped.start, clipped.end, &context);
 }
 
 static void draw_portal_ring(const RayHit *ray, uint24_t x) {
@@ -903,7 +1076,6 @@ static void draw_portal_mask(const RayHit *ray, uint24_t x) {
     uint8_t top_end;
     uint8_t bottom_start;
     uint8_t thickness;
-    uint8_t wall = wall_color(ray);
     uint8_t ring = portal_color(ray->portal_kind);
 
     portal_opening(ray, &context, &top, &bottom);
@@ -911,17 +1083,17 @@ static void draw_portal_mask(const RayHit *ray, uint24_t x) {
     top_end = (uint8_t)(top + thickness);
     if (top_end > context.end) top_end = context.end;
     if (bottom <= top + thickness) {
-        draw_span(x, context.start, context.end, wall);
+        draw_textured_wall_segment(ray, x, context.start, context.end, &context);
         draw_span(x, top, top_end, ring);
         return;
     }
 
     bottom_start = (uint8_t)(bottom - thickness);
     if (bottom_start < context.start) bottom_start = context.start;
-    draw_span(x, context.start, top, wall);
+    draw_textured_wall_segment(ray, x, context.start, top, &context);
     draw_span(x, top, top_end, ring);
     draw_span(x, bottom_start, bottom, ring);
-    draw_span(x, bottom, context.end, wall);
+    draw_textured_wall_segment(ray, x, bottom, context.end, &context);
 }
 
 static void render_column(
@@ -954,7 +1126,7 @@ static void render_column(
         uint8_t next_clip_end;
         RayHit *hit = &render_scratch.layers[count];
 
-        *hit = cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y);
+        cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y, hit);
         has_exit = portal_find_exit(
             game,
             hit->map_x,
@@ -1023,6 +1195,10 @@ void game_init(GameState *game) {
 void game_graphics_init(void) {
     uint24_t index;
     uint16_t height = GFX_LCD_HEIGHT * 4;
+    uint8_t x;
+    uint8_t y;
+    uint8_t shade;
+    static const uint8_t shade_offsets[WALL_SHADE_LEVELS] = {0, 2, 4, 6};
 
     wall_height_table[0] = height;
     for (index = 1; index < WALL_HEIGHT_TABLE_SIZE; ++index) {
@@ -1031,6 +1207,32 @@ void game_graphics_init(void) {
             --height;
         }
         wall_height_table[index] = height;
+    }
+
+    for (index = 0; index < LOGICAL_COLUMNS; ++index) {
+        camera_x_by_column[index] =
+            (int16_t)(((int24_t)index * 512) / LOGICAL_COLUMNS - 256);
+    }
+
+    for (x = 0; x < WALL_TEXTURE_SIZE; ++x) {
+        for (y = 0; y < WALL_TEXTURE_SIZE; ++y) {
+            uint8_t mortar = (x == 0 || y == 0 || y == 8 ||
+                ((y >= 8) ? x == 8 : 0));
+            uint8_t noise = (uint8_t)((x * 5u + y * 3u + ((x ^ y) * 7u)) & 3u);
+            uint8_t brick = (uint8_t)(2u + noise);
+
+            wall_textures[0][(uint16_t)x * WALL_TEXTURE_SIZE + y] =
+                mortar ? 0 : brick;
+        }
+    }
+
+    for (shade = 0; shade < WALL_SHADE_LEVELS; ++shade) {
+        uint8_t color;
+
+        for (color = 0; color < WALL_BASE_COLOR_COUNT; ++color) {
+            wall_shade_table[shade][color] =
+                (uint8_t)(COLOR_TEXTURE_BASE + shade * WALL_BASE_COLOR_COUNT + color);
+        }
     }
 
     gfx_palette[COLOR_BLACK] = gfx_RGBTo1555(0, 0, 0);
@@ -1049,6 +1251,22 @@ void game_graphics_init(void) {
     gfx_palette[COLOR_PRIMARY] = gfx_RGBTo1555(255, 140, 0);
     gfx_palette[COLOR_SECONDARY] = gfx_RGBTo1555(0, 130, 255);
     gfx_palette[COLOR_BUILTIN] = gfx_RGBTo1555(180, 180, 180);
+    gfx_palette[COLOR_CEILING] = gfx_RGBTo1555(22, 24, 38);
+    gfx_palette[COLOR_CEILING_NEAR] = gfx_RGBTo1555(46, 49, 68);
+
+    for (shade = 0; shade < WALL_SHADE_LEVELS; ++shade) {
+        uint8_t offset = shade_offsets[shade];
+        uint8_t base = (uint8_t)(COLOR_TEXTURE_BASE + shade * WALL_BASE_COLOR_COUNT);
+
+        gfx_palette[base + 0] = gfx_RGBTo1555(64 - offset * 4, 54 - offset * 4, 48 - offset * 4);
+        gfx_palette[base + 1] = gfx_RGBTo1555(86 - offset * 5, 65 - offset * 4, 54 - offset * 3);
+        gfx_palette[base + 2] = gfx_RGBTo1555(128 - offset * 8, 68 - offset * 5, 45 - offset * 3);
+        gfx_palette[base + 3] = gfx_RGBTo1555(150 - offset * 9, 78 - offset * 5, 52 - offset * 4);
+        gfx_palette[base + 4] = gfx_RGBTo1555(170 - offset * 10, 92 - offset * 6, 60 - offset * 4);
+        gfx_palette[base + 5] = gfx_RGBTo1555(190 - offset * 11, 108 - offset * 7, 70 - offset * 5);
+        gfx_palette[base + 6] = gfx_RGBTo1555(210 - offset * 12, 125 - offset * 8, 84 - offset * 6);
+        gfx_palette[base + 7] = gfx_RGBTo1555(236 - offset * 13, 150 - offset * 9, 100 - offset * 7);
+    }
 }
 
 uint8_t game_update(
@@ -1124,11 +1342,9 @@ void game_render(const GameState *game) {
     plane_x = -fixed_mul_camera(dir_y, FIELD_OF_VIEW);
     plane_y = fixed_mul_camera(dir_x, FIELD_OF_VIEW);
 
-    gfx_SetColor(COLOR_SKY);
-    gfx_FillRectangle_NoClip(0, 0, GFX_LCD_WIDTH, GFX_LCD_HEIGHT / 2);
+    draw_ceiling_grid(game, dir_x, dir_y);
     gfx_SetColor(COLOR_SKY_HORIZON);
-    gfx_FillRectangle_NoClip(0, 96, GFX_LCD_WIDTH, 24);
-
+    gfx_FillRectangle_NoClip(0, 112, GFX_LCD_WIDTH, 16);
     draw_floor_grid(game, dir_x, dir_y);
 
     for (column = 0; column < LOGICAL_COLUMNS; ++column) {
@@ -1137,7 +1353,7 @@ void game_render(const GameState *game) {
         fixed_t ray_y = dir_y + fixed_mul_camera(plane_y, camera_x);
         render_column(
             game,
-            column * COLUMN_WIDTH,
+            VIEWPORT_X + column * COLUMN_WIDTH,
             ray_x,
             ray_y,
             player_map_x,

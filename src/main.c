@@ -19,6 +19,7 @@ int main(void) {
     game_init(&game);
 
     game_render(&game);
+    gfx_Wait();
     gfx_SwapDraw();
 
     kb_SetMode(MODE_3_CONTINUOUS);
@@ -53,6 +54,7 @@ int main(void) {
             accumulated_ticks = 0;
             if (changed) {
                 game_render(&game);
+                gfx_Wait();
                 gfx_SwapDraw();
             }
         }
