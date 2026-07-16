@@ -1,4 +1,4 @@
-# TRUE3D07 multi-resolution portal renderer
+# TRUE3D06 adaptive portal renderer
 
 This CEdev project replaces the earlier 2.5D sector assumptions with real XYZ
 geometry. Rooms are axis-aligned convex boxes with six independently colored
@@ -17,8 +17,7 @@ Controls:
 - Arrow left/right: turn
 - `F1` (`Y=`): look up
 - `F2` (`Window`): look down
-- `F3` (`Zoom`): cycle 320x240, 128x96, 64x48, and 32x24 rendering
-- `F4` (`Trace`): cycle portal recursion from 1 through 4
+- `F3` (`Zoom`): toggle 64 by 48 / 32 by 24 rendering
 - `2nd`: jump; rise in developer mode
 - `Alpha`: place the orange portal
 - `Mode`: place the blue portal
@@ -27,10 +26,9 @@ Controls:
 - `Clear`: exit
 
 Vertical look has hard stops at straight up and straight down, so the camera
-cannot wrap or roll over. The HUD shows FPS and room state at the upper left,
-plus the exact render resolution and portal recursion cap at the upper right.
-`D` appears while developer mode is active. Developer mode keeps room collision
-but disables gravity and allows free vertical movement.
+cannot wrap or roll over. The HUD shows FPS, the current room number, the active
+resolution, and `D` while developer mode is active. Developer mode keeps room
+collision but disables gravity and allows free vertical movement.
 
 ## Map editor
 
@@ -39,39 +37,35 @@ eight rooms, edit their XYZ bounds and face colors, set the spawn, and configure
 the two initial portals. Its isometric preview and face selectors cover all six
 orientations.
 
-Export `T3DLVL1.8xv`, then transfer that AppVar alongside `TRUE3D07.8xp`. The
+Export `T3DLVL1.8xv`, then transfer that AppVar alongside `TRUE3D06.8xp`. The
 game loads the archived AppVar directly without copying it into working RAM.
 JSON and raw `.t3d` import/export are also available.
 
 ## Performance and memory
 
-The main renderer supports native 320x240 plus 128x96, 64x48, and 32x24 modes.
-Every mode writes mapped spans directly into GraphX's hidden LCD page, avoiding
-a 76,800-byte software framebuffer. Portal recursion is selectable from one to
-four child views. Symmetric clipping against the near and four side-frustum
-planes prevents adjacent walls from separating or exploding while turning near
-a face, and overflow-safe edge interpolation keeps native-resolution spans
-stable.
+The main renderer toggles between a 64 by 48 framebuffer with a fixed 5x
+assembly presenter and a true 32 by 24 performance mode with a fixed 10x
+presenter. Portal recursion is capped at one child view. Symmetric high-precision
+near-plane intersections and accurate tall-edge slopes prevent adjacent walls
+from separating while turning or standing near a face.
 
 Projected convex polygons cache their bounded scanline spans once. Portal
-apertures use exact per-row intervals, so clip construction scales with the
-active render height instead of testing every pixel. Host walls leave portal
+apertures use exact per-row intervals, reducing clip construction from as many
+as 3,072 pixel tests to at most 48 row intersections. Host walls leave portal
 coverage unfilled instead of drawing pixels that the child view immediately
 overwrites, while faces outside a portal's bounding region are rejected before
 rasterization.
 
-Portal views adapt to full, half, or quarter detail relative to the selected
-main resolution. Coarse cells are expanded directly through the exact aperture,
-and hysteresis prevents detail from flickering near a size threshold. When the
-recursion cap is above one, intermediate portal views stay full-detail so the
-requested chain remains visible; adaptive detail is applied at the final view.
-Four derived palette shades provide stable wall-direction lighting plus cheap
-floor and ceiling depth bands; span filling remains a fast single-color
-`memset`.
+In 64 by 48 mode, portal views adapt through 64 by 48, 32 by 24, and 16 by 12.
+In 32 by 24 mode they adapt through 32 by 24, 16 by 12, and 8 by 6. Every child
+view is composited through its original aperture, and hysteresis prevents detail
+from flickering near a size threshold. Four derived palette shades provide
+stable wall-direction lighting plus inexpensive floor and ceiling depth bands;
+span filling remains a fast single-color `memset`.
 
 Build from this directory with `make` and run `make budget` for the conservative
 150 KiB working-RAM check.
 
-The current packaged program is 31,731 bytes. Resident program image, BSS, and
-the complete 4 KiB stack reservation total 95,491 bytes, leaving 58,109 bytes
-below the 150 KiB limit for later physics and game systems.
+The current `-Oz` build is 29,366 bytes. Resident program image, BSS, and the
+complete 4 KiB stack reservation total 54,547 bytes, leaving 99,053 bytes below
+the limit for later physics and game systems.

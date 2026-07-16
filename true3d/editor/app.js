@@ -375,7 +375,7 @@ ui["export-raw"].addEventListener("click", () => {
   catch (error) { setStatus("Export failed", error.message, true); }
 });
 ui["export-appvar"].addEventListener("click", () => {
-  try { download(True3DAppVar.pack(buildT3D()), "T3DLVL1.8xv"); setStatus("Calculator map exported", "Transfer T3DLVL1.8xv with TRUE3D07."); }
+  try { download(True3DAppVar.pack(buildT3D()), "T3DLVL1.8xv"); setStatus("Calculator map exported", "Transfer T3DLVL1.8xv with TRUE3D06."); }
   catch (error) { setStatus("Export failed", error.message, true); }
 });
 ui["import-map"].addEventListener("change", async event => {
