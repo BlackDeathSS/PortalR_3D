@@ -10,7 +10,10 @@ static GameState game;
 
 int main(void) {
     clock_t previous_tick;
+    clock_t fps_window_start;
     uint24_t accumulated_ticks = 0;
+    uint24_t rendered_frames = 1;
+    uint8_t displayed_fps = 0;
     const uint24_t update_ticks = (uint24_t)(CLOCKS_PER_SEC / UPDATE_RATE);
 
     gfx_Begin();
@@ -18,11 +21,12 @@ int main(void) {
     game_graphics_init();
     game_init(&game);
 
-    game_render(&game);
+    game_render(&game, displayed_fps);
     gfx_SwapDraw();
 
     kb_SetMode(MODE_3_CONTINUOUS);
     previous_tick = clock();
+    fps_window_start = previous_tick;
 
     while ((kb_Data[6] & kb_Clear) == 0) {
         clock_t current_tick = clock();
@@ -30,9 +34,21 @@ int main(void) {
         int8_t move_axis;
         int8_t turn_axis;
         uint8_t buttons = 0;
+        uint8_t fps_changed = 0;
+        uint24_t fps_elapsed;
 
         previous_tick = current_tick;
         accumulated_ticks += (uint24_t)elapsed;
+        fps_elapsed = (uint24_t)(current_tick - fps_window_start);
+        if (fps_elapsed >= (uint24_t)CLOCKS_PER_SEC) {
+            uint24_t measured =
+                (rendered_frames * (uint24_t)CLOCKS_PER_SEC) / fps_elapsed;
+            if (measured > 255u) measured = 255u;
+            displayed_fps = (uint8_t)measured;
+            rendered_frames = 0;
+            fps_window_start = current_tick;
+            fps_changed = 1;
+        }
         move_axis = (int8_t)(((kb_Data[7] & kb_Up) != 0) - ((kb_Data[7] & kb_Down) != 0));
         turn_axis = (int8_t)(((kb_Data[7] & kb_Right) != 0) - ((kb_Data[7] & kb_Left) != 0));
 
@@ -51,9 +67,10 @@ int main(void) {
             );
 
             accumulated_ticks = 0;
-            if (changed) {
-                game_render(&game);
+            if (changed || fps_changed) {
+                game_render(&game, displayed_fps);
                 gfx_SwapDraw();
+                ++rendered_frames;
             }
         }
     }

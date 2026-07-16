@@ -57,7 +57,8 @@ enum ColorIndex {
     COLOR_WEST_DARK = 12,
     COLOR_PRIMARY = 13,
     COLOR_SECONDARY = 14,
-    COLOR_BUILTIN = 15
+    COLOR_BUILTIN = 15,
+    COLOR_HUD = 16
 };
 
 typedef struct {
@@ -689,7 +690,7 @@ static uint8_t portal_color(uint8_t kind) {
     return COLOR_BUILTIN;
 }
 
-static void draw_floor_segment(
+static void draw_grid_segment(
     int24_t far_x,
     uint8_t far_y,
     int24_t near_x,
@@ -710,7 +711,8 @@ static void draw_floor_segment(
 static void draw_floor_grid(
     const GameState *game,
     fixed_t direction_x_value,
-    fixed_t direction_y_value
+    fixed_t direction_y_value,
+    uint8_t ceiling
 ) {
     fixed_t inverse_x = direction_x_value == 0 ? 0 :
         delta_for_component(direction_x_value);
@@ -722,13 +724,19 @@ static void draw_floor_grid(
     fixed_t y_far = fixed_mul(direction_y_value, FLOOR_FAR_DISTANCE);
     uint16_t near_height = wall_height_for_distance(FLOOR_NEAR_DISTANCE);
     uint16_t far_height = wall_height_for_distance(FLOOR_FAR_DISTANCE);
-    uint8_t near_screen_y = (uint8_t)(GFX_LCD_HEIGHT / 2 + near_height / 2);
-    uint8_t far_screen_y = (uint8_t)(GFX_LCD_HEIGHT / 2 + far_height / 2);
+    uint8_t near_screen_y = ceiling
+        ? (uint8_t)(GFX_LCD_HEIGHT / 2 - near_height / 2)
+        : (uint8_t)(GFX_LCD_HEIGHT / 2 + near_height / 2);
+    uint8_t far_screen_y = ceiling
+        ? (uint8_t)(GFX_LCD_HEIGHT / 2 - far_height / 2)
+        : (uint8_t)(GFX_LCD_HEIGHT / 2 + far_height / 2);
     uint8_t line;
 
-    gfx_SetColor(COLOR_FLOOR);
-    gfx_FillRectangle_NoClip(0, GFX_LCD_HEIGHT / 2, GFX_LCD_WIDTH, GFX_LCD_HEIGHT / 2);
-    gfx_SetColor(COLOR_FLOOR_NEAR);
+    if (!ceiling) {
+        gfx_SetColor(COLOR_FLOOR);
+        gfx_FillRectangle_NoClip(0, GFX_LCD_HEIGHT / 2, GFX_LCD_WIDTH, GFX_LCD_HEIGHT / 2);
+    }
+    gfx_SetColor(ceiling ? COLOR_SKY_HORIZON : COLOR_FLOOR_NEAR);
 
     /* Project the map's world-space X and Y grid lines into camera space. */
     for (line = 0; line <= MAP_WIDTH; ++line) {
@@ -739,10 +747,11 @@ static void draw_floor_grid(
 
             if (direction_x_value < 0) distance = -distance;
             if (distance >= FLOOR_NEAR_DISTANCE && distance <= FLOOR_FAR_DISTANCE) {
-                int24_t screen_y = GFX_LCD_HEIGHT / 2 +
-                    wall_height_for_distance(distance) / 2;
+                int24_t screen_y = ceiling
+                    ? GFX_LCD_HEIGHT / 2 - wall_height_for_distance(distance) / 2
+                    : GFX_LCD_HEIGHT / 2 + wall_height_for_distance(distance) / 2;
 
-                if (screen_y < GFX_LCD_HEIGHT) {
+                if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT) {
                     gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
                 }
             }
@@ -770,7 +779,7 @@ static void draw_floor_grid(
             if (screen_x_near > FLOOR_PROJECT_LIMIT) screen_x_near = FLOOR_PROJECT_LIMIT;
             if (screen_x_far < -FLOOR_PROJECT_LIMIT) screen_x_far = -FLOOR_PROJECT_LIMIT;
             if (screen_x_far > FLOOR_PROJECT_LIMIT) screen_x_far = FLOOR_PROJECT_LIMIT;
-            draw_floor_segment(
+            draw_grid_segment(
                 screen_x_far,
                 far_screen_y,
                 screen_x_near,
@@ -787,10 +796,11 @@ static void draw_floor_grid(
 
             if (direction_y_value < 0) distance = -distance;
             if (distance >= FLOOR_NEAR_DISTANCE && distance <= FLOOR_FAR_DISTANCE) {
-                int24_t screen_y = GFX_LCD_HEIGHT / 2 +
-                    wall_height_for_distance(distance) / 2;
+                int24_t screen_y = ceiling
+                    ? GFX_LCD_HEIGHT / 2 - wall_height_for_distance(distance) / 2
+                    : GFX_LCD_HEIGHT / 2 + wall_height_for_distance(distance) / 2;
 
-                if (screen_y < GFX_LCD_HEIGHT) {
+                if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT) {
                     gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
                 }
             }
@@ -818,7 +828,7 @@ static void draw_floor_grid(
             if (screen_x_near > FLOOR_PROJECT_LIMIT) screen_x_near = FLOOR_PROJECT_LIMIT;
             if (screen_x_far < -FLOOR_PROJECT_LIMIT) screen_x_far = -FLOOR_PROJECT_LIMIT;
             if (screen_x_far > FLOOR_PROJECT_LIMIT) screen_x_far = FLOOR_PROJECT_LIMIT;
-            draw_floor_segment(
+            draw_grid_segment(
                 screen_x_far,
                 far_screen_y,
                 screen_x_near,
@@ -829,12 +839,21 @@ static void draw_floor_grid(
 }
 
 static void draw_span(uint24_t x, uint8_t start, uint8_t end, uint8_t color) {
+    uint8_t *row;
+
     if (end <= start) {
         return;
     }
 
-    gfx_SetColor(color);
-    gfx_FillRectangle_NoClip(x, start, COLUMN_WIDTH, (uint8_t)(end - start));
+    row = &gfx_vbuffer[start][x];
+    do {
+        row[0] = color;
+        row[1] = color;
+        row[2] = color;
+        row[3] = color;
+        row += GFX_LCD_WIDTH;
+        ++start;
+    } while (start < end);
 }
 
 static void portal_opening(const RayHit *ray, const WallContext *context, uint8_t *top, uint8_t *bottom) {
@@ -1050,6 +1069,7 @@ void game_graphics_init(void) {
     gfx_palette[COLOR_PRIMARY] = gfx_RGBTo1555(255, 140, 0);
     gfx_palette[COLOR_SECONDARY] = gfx_RGBTo1555(0, 130, 255);
     gfx_palette[COLOR_BUILTIN] = gfx_RGBTo1555(180, 180, 180);
+    gfx_palette[COLOR_HUD] = gfx_RGBTo1555(255, 255, 255);
 }
 
 uint8_t game_update(
@@ -1112,7 +1132,54 @@ uint8_t game_update(
     );
 }
 
-void game_render(const GameState *game) {
+/* 3-by-5 glyphs: F, P, S, then digits 0 through 9. */
+static const uint8_t hud_glyphs[13][5] = {
+    {7, 4, 6, 4, 4},
+    {6, 5, 6, 4, 4},
+    {7, 4, 7, 1, 7},
+    {7, 5, 5, 5, 7},
+    {2, 6, 2, 2, 7},
+    {7, 1, 7, 4, 7},
+    {7, 1, 7, 1, 7},
+    {5, 5, 7, 1, 1},
+    {7, 4, 7, 1, 7},
+    {7, 4, 7, 5, 7},
+    {7, 1, 2, 2, 2},
+    {7, 5, 7, 5, 7},
+    {7, 5, 7, 1, 7}
+};
+
+static void draw_hud_glyph(uint8_t glyph, uint8_t x, uint8_t y) {
+    uint8_t row;
+
+    for (row = 0; row < 5; ++row) {
+        uint8_t bits = hud_glyphs[glyph][row];
+        uint8_t column;
+
+        for (column = 0; column < 3; ++column) {
+            if ((bits & (4u >> column)) != 0) {
+                gfx_vbuffer[y + row][x + column] = COLOR_HUD;
+            }
+        }
+    }
+}
+
+static void draw_fps_counter(uint8_t fps) {
+    uint8_t row;
+
+    gfx_SetColor(COLOR_BLACK);
+    for (row = 0; row < 8; ++row) {
+        gfx_HorizLine_NoClip(0, row, 32);
+    }
+    draw_hud_glyph(0, 2, 2);
+    draw_hud_glyph(1, 6, 2);
+    draw_hud_glyph(2, 10, 2);
+    draw_hud_glyph((uint8_t)(3 + fps / 100u), 18, 2);
+    draw_hud_glyph((uint8_t)(3 + (fps / 10u) % 10u), 22, 2);
+    draw_hud_glyph((uint8_t)(3 + fps % 10u), 26, 2);
+}
+
+void game_render(const GameState *game, uint8_t fps) {
     fixed_t dir_x;
     fixed_t dir_y;
     fixed_t plane_x;
@@ -1130,7 +1197,8 @@ void game_render(const GameState *game) {
     gfx_SetColor(COLOR_SKY_HORIZON);
     gfx_FillRectangle_NoClip(0, 96, GFX_LCD_WIDTH, 24);
 
-    draw_floor_grid(game, dir_x, dir_y);
+    draw_floor_grid(game, dir_x, dir_y, 1);
+    draw_floor_grid(game, dir_x, dir_y, 0);
 
     for (column = 0; column < LOGICAL_COLUMNS; ++column) {
         fixed_t camera_x = camera_x_by_column[column];
@@ -1145,4 +1213,6 @@ void game_render(const GameState *game) {
             player_map_y
         );
     }
+
+    draw_fps_counter(fps);
 }
