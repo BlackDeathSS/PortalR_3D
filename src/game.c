@@ -10,6 +10,9 @@
 #define MAP_HEIGHT 15
 #define LOGICAL_COLUMNS 80
 #define COLUMN_WIDTH 4
+#define PERFORMANCE_TARGET_FPS 15
+#define PORTAL_PERF_DEPTH 3
+#define PORTAL_PERF_COLUMN_STEP 2
 #define FLOOR_NEAR_DISTANCE (FIXED_ONE + 4)
 #define FLOOR_FAR_DISTANCE (FIXED_ONE * 16)
 #define FLOOR_PROJECT_LIMIT 4096
@@ -17,6 +20,9 @@
 #define WALL_HEIGHT_TABLE_SIZE 2048
 #define WALL_HEIGHT_FAR 7
 #define MAX_PORTAL_DEPTH 12
+#ifndef PERF_HUD
+#define PERF_HUD 1
+#endif
 #define PORTAL_RECURSE_MIN_HEIGHT 3
 #define PLAYER_RADIUS 44
 #define FIELD_OF_VIEW 169
@@ -92,7 +98,19 @@ typedef struct {
     RayHit layers[MAX_PORTAL_DEPTH];
 } RenderScratch;
 
+typedef struct {
+    uint8_t rendered_columns;
+    uint16_t cast_wall_calls;
+    uint16_t dda_steps;
+    uint16_t portal_layers;
+    uint16_t draw_span_calls;
+    uint16_t span_rows_written;
+    uint16_t floor_grid_line_draws;
+} FrameProfiler;
+
 static RenderScratch render_scratch;
+static FrameProfiler frame_profiler;
+static uint8_t frame_column_width = COLUMN_WIDTH;
 static uint16_t wall_height_table[WALL_HEIGHT_TABLE_SIZE];
 
 _Static_assert(sizeof(RenderScratch) <= 256u, "Render scratch exceeded its RAM budget");
@@ -357,6 +375,8 @@ static void cast_wall(
     fixed_t side_y;
     fixed_t wall_position;
 
+    ++frame_profiler.cast_wall_calls;
+
     hit->step_x = ray_x < 0 ? -1 : 1;
     hit->step_y = ray_y < 0 ? -1 : 1;
 
@@ -385,6 +405,7 @@ static void cast_wall(
     }
 
     do {
+        ++frame_profiler.dda_steps;
         if (side_x < side_y) {
             side_x += delta_x;
             map_x += hit->step_x;
@@ -706,6 +727,7 @@ static void draw_grid_segment(
     } else {
         gfx_Line(far_x, far_y, near_x, near_y);
     }
+    ++frame_profiler.floor_grid_line_draws;
 }
 
 static void draw_floor_grid(
@@ -753,6 +775,7 @@ static void draw_floor_grid(
 
                 if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT) {
                     gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
+                    ++frame_profiler.floor_grid_line_draws;
                 }
             }
         } else {
@@ -802,6 +825,7 @@ static void draw_floor_grid(
 
                 if (screen_y >= 0 && screen_y < GFX_LCD_HEIGHT) {
                     gfx_HorizLine_NoClip(0, (uint8_t)screen_y, GFX_LCD_WIDTH);
+                    ++frame_profiler.floor_grid_line_draws;
                 }
             }
         } else {
@@ -845,12 +869,31 @@ static void draw_span(uint24_t x, uint8_t start, uint8_t end, uint8_t color) {
         return;
     }
 
+    ++frame_profiler.draw_span_calls;
+    frame_profiler.span_rows_written += (uint16_t)(end - start);
+
     row = &gfx_vbuffer[start][x];
+    if (frame_column_width == COLUMN_WIDTH) {
+        do {
+            row[0] = color;
+            row[1] = color;
+            row[2] = color;
+            row[3] = color;
+            row += GFX_LCD_WIDTH;
+            ++start;
+        } while (start < end);
+        return;
+    }
+
     do {
         row[0] = color;
         row[1] = color;
         row[2] = color;
         row[3] = color;
+        row[4] = color;
+        row[5] = color;
+        row[6] = color;
+        row[7] = color;
         row += GFX_LCD_WIDTH;
         ++start;
     } while (start < end);
@@ -950,7 +993,8 @@ static void render_column(
     fixed_t ray_x,
     fixed_t ray_y,
     uint8_t start_map_x,
-    uint8_t start_map_y
+    uint8_t start_map_y,
+    uint8_t portal_depth_limit
 ) {
     fixed_t origin_x = game->player_x;
     fixed_t origin_y = game->player_y;
@@ -962,7 +1006,7 @@ static void render_column(
     uint8_t clip_end = GFX_LCD_HEIGHT;
     uint8_t terminal_open = 0;
 
-    while (count < MAX_PORTAL_DEPTH) {
+    while (count < portal_depth_limit) {
         Portal exit;
         uint8_t kind;
         uint8_t portal_id;
@@ -986,6 +1030,7 @@ static void render_column(
         );
         hit->portal_kind = kind;
         ++count;
+        ++frame_profiler.portal_layers;
 
         if (!has_exit) {
             break;
@@ -1006,7 +1051,7 @@ static void render_column(
 
         /* Preserve an open aperture at the recursion/visibility limit. */
         if (clip_end - clip_start < PORTAL_RECURSE_MIN_HEIGHT ||
-            count >= MAX_PORTAL_DEPTH ||
+            count >= portal_depth_limit ||
             (visited & (1u << portal_id)) != 0) {
             terminal_open = 1;
             break;
@@ -1164,6 +1209,34 @@ static void draw_hud_glyph(uint8_t glyph, uint8_t x, uint8_t y) {
     }
 }
 
+
+#if PERF_HUD
+static void draw_hud_number(uint16_t value, uint8_t x, uint8_t y) {
+    if (value > 999) value = 999;
+    draw_hud_glyph((uint8_t)(3 + value / 100u), x, y);
+    draw_hud_glyph((uint8_t)(3 + (value / 10u) % 10u), (uint8_t)(x + 4), y);
+    draw_hud_glyph((uint8_t)(3 + value % 10u), (uint8_t)(x + 8), y);
+}
+
+static void draw_profiler_hud(void) {
+    uint8_t row;
+
+    gfx_SetColor(COLOR_BLACK);
+    for (row = 10; row < 46; ++row) {
+        gfx_HorizLine_NoClip(0, row, 80);
+    }
+
+    /* PERF_HUD layout: columns, casts, DDA steps, layers, spans, rows/10, grid lines. */
+    draw_hud_number(frame_profiler.rendered_columns, 2, 12);
+    draw_hud_number(frame_profiler.cast_wall_calls, 18, 12);
+    draw_hud_number(frame_profiler.dda_steps, 34, 12);
+    draw_hud_number(frame_profiler.portal_layers, 50, 12);
+    draw_hud_number(frame_profiler.draw_span_calls, 2, 22);
+    draw_hud_number(frame_profiler.span_rows_written / 10u, 18, 22);
+    draw_hud_number(frame_profiler.floor_grid_line_draws, 34, 22);
+}
+#endif
+
 static void draw_fps_counter(uint8_t fps) {
     uint8_t row;
 
@@ -1187,6 +1260,17 @@ void game_render(const GameState *game, uint8_t fps) {
     uint8_t player_map_x = (uint8_t)(game->player_x / FIXED_ONE);
     uint8_t player_map_y = (uint8_t)(game->player_y / FIXED_ONE);
     uint24_t column;
+    uint8_t portal_performance_mode = fps < PERFORMANCE_TARGET_FPS;
+    uint8_t column_step = portal_performance_mode ? PORTAL_PERF_COLUMN_STEP : 1;
+    uint8_t portal_depth_limit = portal_performance_mode ? PORTAL_PERF_DEPTH : MAX_PORTAL_DEPTH;
+
+    frame_profiler.rendered_columns = 0;
+    frame_profiler.cast_wall_calls = 0;
+    frame_profiler.dda_steps = 0;
+    frame_profiler.portal_layers = 0;
+    frame_profiler.draw_span_calls = 0;
+    frame_profiler.span_rows_written = 0;
+    frame_profiler.floor_grid_line_draws = 0;
 
     direction_for_angle(game->angle, &dir_x, &dir_y);
     plane_x = -fixed_mul_camera(dir_y, FIELD_OF_VIEW);
@@ -1197,22 +1281,34 @@ void game_render(const GameState *game, uint8_t fps) {
     gfx_SetColor(COLOR_SKY_HORIZON);
     gfx_FillRectangle_NoClip(0, 96, GFX_LCD_WIDTH, 24);
 
-    draw_floor_grid(game, dir_x, dir_y, 1);
-    draw_floor_grid(game, dir_x, dir_y, 0);
+    if (portal_performance_mode) {
+        gfx_SetColor(COLOR_FLOOR);
+        gfx_FillRectangle_NoClip(0, GFX_LCD_HEIGHT / 2, GFX_LCD_WIDTH, GFX_LCD_HEIGHT / 2);
+    } else {
+        draw_floor_grid(game, dir_x, dir_y, 1);
+        draw_floor_grid(game, dir_x, dir_y, 0);
+    }
 
-    for (column = 0; column < LOGICAL_COLUMNS; ++column) {
+    frame_column_width = (uint8_t)(COLUMN_WIDTH * column_step);
+    for (column = 0; column < LOGICAL_COLUMNS; column += column_step) {
         fixed_t camera_x = camera_x_by_column[column];
         fixed_t ray_x = dir_x + fixed_mul_camera(plane_x, camera_x);
         fixed_t ray_y = dir_y + fixed_mul_camera(plane_y, camera_x);
+
+        ++frame_profiler.rendered_columns;
         render_column(
             game,
             column * COLUMN_WIDTH,
             ray_x,
             ray_y,
             player_map_x,
-            player_map_y
+            player_map_y,
+            portal_depth_limit
         );
     }
 
     draw_fps_counter(fps);
+#if PERF_HUD
+    draw_profiler_hud();
+#endif
 }
