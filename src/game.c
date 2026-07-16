@@ -341,23 +341,23 @@ static void rotate_quarter(fixed_t *x, fixed_t *y, int8_t quarters) {
     }
 }
 
-static RayHit cast_wall(
+static void cast_wall(
     fixed_t origin_x,
     fixed_t origin_y,
     fixed_t ray_x,
     fixed_t ray_y,
     int24_t map_x,
-    int24_t map_y
+    int24_t map_y,
+    RayHit *hit
 ) {
-    RayHit hit;
     fixed_t delta_x;
     fixed_t delta_y;
     fixed_t side_x;
     fixed_t side_y;
     fixed_t wall_position;
 
-    hit.step_x = ray_x < 0 ? -1 : 1;
-    hit.step_y = ray_y < 0 ? -1 : 1;
+    hit->step_x = ray_x < 0 ? -1 : 1;
+    hit->step_y = ray_y < 0 ? -1 : 1;
 
     if (ray_x == 0) {
         delta_x = FIXED_INF;
@@ -386,33 +386,32 @@ static RayHit cast_wall(
     do {
         if (side_x < side_y) {
             side_x += delta_x;
-            map_x += hit.step_x;
-            hit.side = 0;
+            map_x += hit->step_x;
+            hit->side = 0;
         } else {
             side_y += delta_y;
-            map_y += hit.step_y;
-            hit.side = 1;
+            map_y += hit->step_y;
+            hit->side = 1;
         }
     } while (!map_is_wall(map_x, map_y));
 
-    if (hit.side == 0) {
-        hit.distance = side_x - delta_x;
-        hit.wall_direction = ray_x >= 0 ? DIR_NORTH : DIR_SOUTH;
-        wall_position = origin_y + fixed_mul(hit.distance, ray_y);
+    if (hit->side == 0) {
+        hit->distance = side_x - delta_x;
+        hit->wall_direction = ray_x >= 0 ? DIR_NORTH : DIR_SOUTH;
+        wall_position = origin_y + fixed_mul(hit->distance, ray_y);
     } else {
-        hit.distance = side_y - delta_y;
-        hit.wall_direction = ray_y >= 0 ? DIR_WEST : DIR_EAST;
-        wall_position = origin_x + fixed_mul(hit.distance, ray_x);
+        hit->distance = side_y - delta_y;
+        hit->wall_direction = ray_y >= 0 ? DIR_WEST : DIR_EAST;
+        wall_position = origin_x + fixed_mul(hit->distance, ray_x);
     }
 
-    if (hit.distance < 1) {
-        hit.distance = 1;
+    if (hit->distance < 1) {
+        hit->distance = 1;
     }
-    hit.map_x = (uint8_t)map_x;
-    hit.map_y = (uint8_t)map_y;
-    hit.wall_u = (uint8_t)(wall_position & 0xFF);
-    hit.portal_kind = PORTAL_NONE;
-    return hit;
+    hit->map_x = (uint8_t)map_x;
+    hit->map_y = (uint8_t)map_y;
+    hit->wall_u = (uint8_t)(wall_position & 0xFF);
+    hit->portal_kind = PORTAL_NONE;
 }
 
 static void transform_ray(
@@ -600,10 +599,12 @@ static void place_portal(GameState *game, uint8_t primary) {
     direction_for_angle(game->angle, &ray_x, &ray_y);
 
     for (depth = 0; depth < MAX_PORTAL_DEPTH; ++depth) {
-        RayHit hit = cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y);
+        RayHit hit;
         Portal exit;
         uint8_t kind;
         uint8_t portal_id;
+
+        cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y, &hit);
 
         if (portal_find_exit(
             game,
@@ -954,7 +955,7 @@ static void render_column(
         uint8_t next_clip_end;
         RayHit *hit = &render_scratch.layers[count];
 
-        *hit = cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y);
+        cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y, hit);
         has_exit = portal_find_exit(
             game,
             hit->map_x,
