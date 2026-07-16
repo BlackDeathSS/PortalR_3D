@@ -39,6 +39,11 @@
     <div>A / D – rotate left/right</div>
     <div>Q / E – place portals</div>
     <div>R – clear portals</div>
+    <div>1 – cycle resolution (0.25x…10x)</div>
+    <div>2 – cycle portal recursion</div>
+    <div>3 / 4 – toggle floor / ceiling</div>
+    <div>5 / 6 – toggle textured walls / fog</div>
+    <div id="render-options">Render: native</div>
     <div id="fps">0 fps</div>
     <div id="player-pos">Pos: 0.00, 0.00</div>
 </div>
@@ -276,8 +281,11 @@ const Color = {
 };
 
 class RenderUtil {
-    constructor(ctx, width, height) {
+    constructor(ctx, width, height, options) {
         this.ctx = ctx;
+        this.displayWidth = width;
+        this.displayHeight = height;
+        this.options = options;
         this.width = width;
         this.height = height;
         this.imageData = ctx.createImageData(width, height);
@@ -285,6 +293,24 @@ class RenderUtil {
         this.halfCircle = new HalfCircle();
         this.wallShadeCurve = new FakeSSAOCurve();
         this.wallTextures = new Map();
+        this.scratchCanvas = document.createElement("canvas");
+        this.scratchCanvas.width = this.width;
+        this.scratchCanvas.height = this.height;
+        this.scratchCtx = this.scratchCanvas.getContext("2d");
+    }
+
+    resizeForScale(scale) {
+        const nextWidth = Math.max(1, Math.round(this.displayWidth * scale));
+        const nextHeight = Math.max(1, Math.round(this.displayHeight * scale));
+        if (nextWidth === this.width && nextHeight === this.height) {
+            return;
+        }
+        this.width = nextWidth;
+        this.height = nextHeight;
+        this.imageData = this.ctx.createImageData(this.width, this.height);
+        this.buffer = new Uint32Array(this.imageData.data.buffer);
+        this.scratchCanvas.width = this.width;
+        this.scratchCanvas.height = this.height;
     }
 
     calcDrawStartEnd(ray) {
@@ -318,7 +344,7 @@ class RenderUtil {
             const context = this.calcDrawStartEnd(lastRay);
             this.paintWall(lastRay, x);
             this.drawPortalRing(lastRay, x, context);
-            this.paintFloor(lastRay, x, context.end, this.height - 1);
+            this.paintFloorAndCeiling(lastRay, x, context.end, this.height - 1);
         }
     }
 
@@ -332,10 +358,10 @@ class RenderUtil {
 
             const currentContext = this.calcDrawStartEnd(currentWallRay);
             if (currentWallRay === nextWallRay) {
-                this.paintFloor(currentWallRay, x, currentContext.end, this.height - 1);
+                this.paintFloorAndCeiling(currentWallRay, x, currentContext.end, this.height - 1);
             } else {
                 const nextContext = this.calcDrawStartEnd(nextWallRay);
-                this.paintFloor(currentWallRay, x, currentContext.end, nextContext.end);
+                this.paintFloorAndCeiling(currentWallRay, x, currentContext.end, nextContext.end);
                 this.paintMask(nextWallRay, x);
             }
         }
@@ -455,11 +481,22 @@ class RenderUtil {
     }
 
     wallPixel(ray, y, context) {
-        const baseColor = this.wallColor(ray);
-        return this.wallSSAO(y, context.start, context.end, baseColor);
+        let baseColor = this.wallColor(ray);
+        if (this.options.texturedWalls) {
+            const texX = Math.floor(ray.wallX * 8);
+            const texY = Math.floor(((y - context.start + context.topClip) / Math.max(1, context.wallHeight)) * 8);
+            if (((texX ^ texY ^ ray.tileId) & 1) !== 0) {
+                baseColor = Color.darken(baseColor, 45);
+            }
+        }
+        let shaded = this.wallSSAO(y, context.start, context.end, baseColor);
+        if (this.options.fog) {
+            shaded = Color.darken(shaded, Math.min(190, Math.floor(ray.distance * 24)));
+        }
+        return shaded;
     }
 
-    paintFloor(ray, x, wallDrawEnd, stopHeight) {
+    paintFloorAndCeiling(ray, x, wallDrawEnd, stopHeight) {
         let floorXWall;
         let floorYWall;
 
@@ -504,13 +541,27 @@ class RenderUtil {
                 ? Color.color(119, 119, 119)
                 : Color.color(226, 226, 226);
 
-            this.buffer[(y * this.width + x)] = floorColor;
-            this.buffer[((this.height - y) * this.width + x)] = ceilingColor;
+            if (this.options.floor) {
+                this.buffer[(y * this.width + x)] = this.options.fog
+                    ? Color.darken(floorColor, Math.min(160, Math.floor(currentDist * 18)))
+                    : floorColor;
+            }
+            if (this.options.ceiling) {
+                const ceilingY = this.height - y;
+                if (ceilingY >= 0 && ceilingY < this.height) {
+                    this.buffer[(ceilingY * this.width + x)] = this.options.fog
+                        ? Color.darken(ceilingColor, Math.min(160, Math.floor(currentDist * 18)))
+                        : ceilingColor;
+                }
+            }
         }
     }
 
     drawFrame() {
-        this.ctx.putImageData(this.imageData, 0, 0);
+        this.ctx.imageSmoothingEnabled = false;
+        this.scratchCtx.putImageData(this.imageData, 0, 0);
+        this.ctx.clearRect(0, 0, this.displayWidth, this.displayHeight);
+        this.ctx.drawImage(this.scratchCanvas, 0, 0, this.displayWidth, this.displayHeight);
     }
 }
 
@@ -629,9 +680,10 @@ class Player {
 }
 
 class Game {
-    constructor(renderUtil) {
+    constructor(renderUtil, options) {
         this.threads = 6;
-        this.maxPortalDepth = 100;
+        this.options = options;
+        this.maxPortalDepth = options.portalDepth;
         const rawMap = [
             [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
             [1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1],
@@ -701,6 +753,7 @@ class Game {
         this.applyStandaloneIndicator(ray);
         const rays = [ray];
 
+        this.maxPortalDepth = this.options.portalDepth;
         while (rays.length < this.maxPortalDepth) {
             const newRay = this.castPortalRay(rays[rays.length - 1]);
             if (!newRay) {
@@ -927,8 +980,23 @@ const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const fpsLabel = document.getElementById("fps");
 const playerPosLabel = document.getElementById("player-pos");
-const renderUtil = new RenderUtil(ctx, canvas.width, canvas.height);
-const game = new Game(renderUtil);
+const renderOptionsLabel = document.getElementById("render-options");
+const renderScales = [0.25, 0.5, 1, 2, 4, 6, 8, 10];
+const portalDepths = [1, 2, 3, 5, 8, 13, 21, 34, 55, 100];
+const renderOptions = {
+    scaleIndex: 2,
+    portalDepthIndex: 9,
+    floor: true,
+    ceiling: true,
+    texturedWalls: true,
+    fog: false,
+    get scale() { return renderScales[this.scaleIndex]; },
+    get portalDepth() { return portalDepths[this.portalDepthIndex]; }
+};
+const renderUtil = new RenderUtil(ctx, canvas.width, canvas.height, renderOptions);
+const game = new Game(renderUtil, renderOptions);
+renderUtil.resizeForScale(renderOptions.scale);
+updateRenderOptionsLabel();
 
 let running = true;
 let move = 0;
@@ -978,9 +1046,52 @@ function handleKeyState(code, pressed) {
                 game.clearPlayerPortals();
             }
             break;
+        case "Digit1":
+            if (pressed) {
+                renderOptions.scaleIndex = (renderOptions.scaleIndex + 1) % renderScales.length;
+                renderUtil.resizeForScale(renderOptions.scale);
+                updateRenderOptionsLabel();
+            }
+            break;
+        case "Digit2":
+            if (pressed) {
+                renderOptions.portalDepthIndex = (renderOptions.portalDepthIndex + 1) % portalDepths.length;
+                updateRenderOptionsLabel();
+            }
+            break;
+        case "Digit3":
+            if (pressed) {
+                renderOptions.floor = !renderOptions.floor;
+                updateRenderOptionsLabel();
+            }
+            break;
+        case "Digit4":
+            if (pressed) {
+                renderOptions.ceiling = !renderOptions.ceiling;
+                updateRenderOptionsLabel();
+            }
+            break;
+        case "Digit5":
+            if (pressed) {
+                renderOptions.texturedWalls = !renderOptions.texturedWalls;
+                updateRenderOptionsLabel();
+            }
+            break;
+        case "Digit6":
+            if (pressed) {
+                renderOptions.fog = !renderOptions.fog;
+                updateRenderOptionsLabel();
+            }
+            break;
         default:
             break;
     }
+}
+
+function updateRenderOptionsLabel() {
+    renderOptionsLabel.textContent = `Render: ${renderOptions.scale}x, portals ${renderOptions.portalDepth}, ` +
+        `floor ${renderOptions.floor ? "on" : "off"}, ceiling ${renderOptions.ceiling ? "on" : "off"}, ` +
+        `textures ${renderOptions.texturedWalls ? "on" : "off"}, fog ${renderOptions.fog ? "on" : "off"}`;
 }
 
 let lastTime = performance.now();
