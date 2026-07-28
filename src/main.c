@@ -1,12 +1,101 @@
 #include "game.h"
 
+#ifndef RENDER_BENCHMARK
+#define RENDER_BENCHMARK 0
+#endif
+#ifndef RENDER_LIVE_BENCHMARK
+#define RENDER_LIVE_BENCHMARK 0
+#endif
+
+#if RENDER_LIVE_BENCHMARK
+
+#include "live_benchmark.h"
+
+int main(void) {
+    return live_benchmark_run();
+}
+
+#elif RENDER_BENCHMARK
+
+#include "benchmark.h"
+
+int main(void) {
+    return benchmark_run();
+}
+
+#else
+
 #include <graphx.h>
 #include <keypadc.h>
 #include <time.h>
 
 #define UPDATE_RATE 60u
 
+#ifndef RENDER_PROFILE
+#define RENDER_PROFILE 0
+#endif
+
 static GameState game;
+
+#if RENDER_PROFILE
+static uint24_t ticks_to_milliseconds(clock_t ticks) {
+    return (uint24_t)((ticks * 1000UL) / CLOCKS_PER_SEC);
+}
+
+static void print_profile_value(
+    const char *label,
+    uint24_t x,
+    uint8_t y,
+    uint24_t value,
+    uint8_t width
+) {
+    gfx_PrintStringXY(label, x, y);
+    gfx_SetTextXY(x + 8, y);
+    gfx_PrintUInt(value, width);
+}
+#endif
+
+static void render_frame(void) {
+#if RENDER_PROFILE
+    clock_t started = clock();
+    clock_t elapsed;
+    const GameRenderProfile *profile;
+
+    game_render(&game);
+    elapsed = clock() - started;
+    profile = game_get_render_profile();
+
+    gfx_SetColor(0);
+#if RENDER_RAY_DIAGNOSTIC
+    gfx_FillRectangle_NoClip(0, 0, GFX_LCD_WIDTH, 20);
+#else
+    gfx_FillRectangle_NoClip(0, 0, 216, 20);
+#endif
+    gfx_SetTextFGColor(15);
+    gfx_SetTextBGColor(0);
+    gfx_SetTextTransparentColor(0);
+    print_profile_value("T", 2, 1, ticks_to_milliseconds(elapsed), 3);
+    print_profile_value("W", 42, 1, ticks_to_milliseconds(profile->wait_ticks), 3);
+    print_profile_value("B", 82, 1, ticks_to_milliseconds(profile->background_ticks), 3);
+    print_profile_value("C", 122, 1, ticks_to_milliseconds(profile->columns_ticks), 3);
+    print_profile_value("R", 2, 11, profile->cast_count, 3);
+    print_profile_value("D", 42, 11, profile->max_depth, 1);
+#if RENDER_RAY_DIAGNOSTIC
+    print_profile_value("A", 62, 11, profile->near_column, 2);
+    print_profile_value("L", 90, 11, profile->near_layer, 1);
+    print_profile_value("Q", 110, 11, profile->near_raw_distance, 3);
+    print_profile_value("P", 146, 11, profile->near_projected_distance, 3);
+    print_profile_value("N", 182, 11, profile->near_minor, 3);
+    print_profile_value("F", 218, 11, profile->near_origin_fraction, 3);
+    print_profile_value("M", 250, 11, profile->near_hit_cell, 3);
+    print_profile_value("S", 284, 11, profile->near_side, 1);
+    print_profile_value("V", 302, 11, profile->near_valid, 1);
+#endif
+#else
+    game_render(&game);
+#endif
+    gfx_SwapDraw();
+}
 
 int main(void) {
     clock_t previous_tick;
@@ -18,9 +107,7 @@ int main(void) {
     game_graphics_init();
     game_init(&game);
 
-    game_render(&game);
-    gfx_Wait();
-    gfx_SwapDraw();
+    render_frame();
 
     kb_SetMode(MODE_3_CONTINUOUS);
     previous_tick = clock();
@@ -53,9 +140,7 @@ int main(void) {
 
             accumulated_ticks = 0;
             if (changed) {
-                game_render(&game);
-                gfx_Wait();
-                gfx_SwapDraw();
+                render_frame();
             }
         }
     }
@@ -64,3 +149,5 @@ int main(void) {
     gfx_End();
     return 0;
 }
+
+#endif
