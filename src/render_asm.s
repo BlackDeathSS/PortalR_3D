@@ -16,56 +16,156 @@
 	.equ DIR_SOUTH, 1
 	.equ DIR_WEST, 2
 	.equ DIR_EAST, 3
+	.equ STATE_ORIGIN_X, 0
+	.equ STATE_ORIGIN_Y, 3
+	.equ STATE_RAY_X, 6
+	.equ STATE_RAY_Y, 9
+	.equ STATE_DELTA_X, 12
+	.equ STATE_DELTA_Y, 15
+	.equ STATE_QX, 18
+	.equ STATE_QY, 21
+	.equ STATE_ABS_X_SHIFT, 24
+	.equ STATE_ABS_X, 25
+	.equ STATE_ABS_Y_SHIFT, 27
+	.equ STATE_ABS_Y, 28
+	.equ STATE_ABS_END, 30
+	.equ STATE_THRESHOLD, 31
+	.equ STATE_MAP_STEP_X, 34
+	.equ STATE_MAP_STEP_Y, 37
+	.equ STATE_HIT, 40
+	.equ STATE_GAME, 43
+	.equ STATE_PRIMARY_TILE, 46
+	.equ STATE_SECONDARY_TILE, 47
+	.equ STATE_PORTAL_EXIT, 48
+	.equ STATE_PORTAL_KIND, 52
+	.equ STATE_PORTAL_ID, 53
+	.equ STATE_PORTAL_HAS_EXIT, 54
+	.equ STATE_SIZE, 55
 	.equ GRID_FAR_X, 0
-	.equ GRID_NEAR_X, 3
-	.equ GRID_FAR_Y, 6
-	.equ GRID_KIND, 7
-	.equ GRID_SLANTED_NOCLIP, 0
-	.equ GRID_HORIZONTAL, 1
-	.equ GRID_SLANTED_CLIPPED, 2
+	.equ GRID_NEAR_X, 2
 	.equ GRID_PROJECTION_POSITIVE_LIMIT, 0
 	.equ GRID_PROJECTION_NEGATIVE_LIMIT, 3
 	.equ GRID_PROJECTION_HEIGHT, 6
 	.equ GRID_PROJECTION_SCREEN_Y, 8
 	.equ GRID_NEAR_SCREEN_Y, 238
 	.equ GRID_FAR_SCREEN_Y, 127
+	.equ GRID_CEILING_NEAR_SCREEN_Y, 2
+	.equ GRID_CEILING_FAR_SCREEN_Y, 113
+	.equ GRID_FLOOR_COLOR, 4
+	.equ GRID_CEILING_COLOR, 17
+	.equ GRID_HORIZONTAL_BYTES, 320
+	.equ GRID_HORIZONTAL_PUSHES, 106
+	.equ GRID_HORIZONTAL_HEAD_BYTES, 2
+	.equ BACKGROUND_HORIZON_COLOR, 2
+	.equ BACKGROUND_FLOOR_COLOR, 3
+	.equ BACKGROUND_CEILING_COLOR, 16
+	.equ BACKGROUND_BUFFER_BYTES, 76800
+	.equ BACKGROUND_CEILING_BYTES, 35840
+	.equ BACKGROUND_HORIZON_BYTES, 5120
+	.equ BACKGROUND_FLOOR_BYTES, 35840
+	.equ BACKGROUND_INTERRUPT_BYTES, 4001
+	.equ BACKGROUND_PUSHES_PER_ITER, 115
+	.equ BACKGROUND_FLOOR_ITERS, 103
+	.equ BACKGROUND_FLOOR_TAIL, 101
+	.equ BACKGROUND_HORIZON_ITERS, 14
+	.equ BACKGROUND_HORIZON_TAIL, 96
+	.equ BACKGROUND_CEILING_ITERS, 92
+	.equ BACKGROUND_CEILING_TAIL, 33
+	.equ BACKGROUND_REPAIR_TOP_OFFSET, 35840
+	.equ BACKGROUND_REPAIR_TOP_BYTES, 640
+	.equ BACKGROUND_REPAIR_BOTTOM_OFFSET, 40640
+	.equ BACKGROUND_REPAIR_BOTTOM_BYTES, 320
 
-	.section .text._render_asm_cast_wall,"ax",@progbits
-	.global _render_asm_cast_wall
-	.type _render_asm_cast_wall, @function
+	.section .text._render_asm_cast_wall_begin,"ax",@progbits
+	.global _render_asm_cast_wall_begin
+	.global _render_asm_cast_wall_continue
+	.type _render_asm_cast_wall_begin, @function
+	.type _render_asm_cast_wall_continue, @function
 
 /*
- * Exact 8.8 grid DDA for the C renderer.
+ * Persistent exact 8.8 grid DDA for the C renderer.
  *
- * C ABI stack slots after __frameset0:
+ * Begin ABI stack slots after __frameset0:
  *   ix+6  origin_x       ix+9  origin_y
  *   ix+12 ray_x          ix+15 ray_y
- *   ix+18 map_x          ix+21 map_y
- *   ix+24 RayHit *       ix+27 delta_x
- *   ix+30 delta_y
+ *   ix+18 RayHit *
  *
-	 * The generic loop keeps its exact modular recurrence in HL/BC/DE, the
-	 * RayHit pointer in IY, and the current padded-map pointer in shadow HL.
-	 * The specialized exact-axis paths step the map directly because
-	 * projection distance is reconstructed after the hit.
+ * Continue has only ix+6 RayHit *.  Ray direction, reciprocal deltas,
+ * magnitudes, threshold, origin, and signed map strides persist in the fixed
+ * state block.  Portal transforms rotate that block between continuations.
+ *
+ * The generic loop keeps its exact modular recurrence in HL/BC/DE, the
+ * RayHit pointer in IY, and the current padded-map pointer in shadow HL.
+ * The specialized exact-axis paths step the map directly because projection
+ * distance is reconstructed after the hit.
  */
-_render_asm_cast_wall:
+_render_asm_cast_wall_begin:
 	call __frameset0
 
-	ld iy, (ix + 24)
+	/* Seed the persistent values once for this logical screen ray. */
+	ld hl, (ix + 6)
+	ld (_render_ray_state + STATE_ORIGIN_X), hl
+	ld hl, (ix + 9)
+	ld (_render_ray_state + STATE_ORIGIN_Y), hl
+	ld hl, (ix + 12)
+	ld (_render_ray_state + STATE_RAY_X), hl
+	ld a, (ix + 14)
+	ld iy, _render_ray_state + STATE_ABS_X
+	call .Lstate_component_init
+	ld (_render_ray_state + STATE_DELTA_X), hl
+	ld hl, (ix + 15)
+	ld (_render_ray_state + STATE_RAY_Y), hl
+	ld a, (ix + 17)
+	ld iy, _render_ray_state + STATE_ABS_Y
+	call .Lstate_component_init
+	ld (_render_ray_state + STATE_DELTA_Y), hl
 
+	/* T=(abs_x+abs_y)<<8 is invariant under every portal rotation. */
+	ld hl, (_render_ray_state + STATE_ABS_X_SHIFT)
+	ld de, (_render_ray_state + STATE_ABS_Y_SHIFT)
+	add hl, de
+	ld (_render_ray_state + STATE_THRESHOLD), hl
+
+	/* Zero components retain the legacy positive map stride. */
+	ld hl, 1
+	ld a, (_render_ray_state + STATE_RAY_X + 2)
+	bit 7, a
+	jr z, .Lbegin_step_x_ready
+	ld hl, -1
+.Lbegin_step_x_ready:
+	ld (_render_ray_state + STATE_MAP_STEP_X), hl
+	ld hl, 16
+	ld a, (_render_ray_state + STATE_RAY_Y + 2)
+	bit 7, a
+	jr z, .Lbegin_step_y_ready
+	ld hl, -16
+.Lbegin_step_y_ready:
+	ld (_render_ray_state + STATE_MAP_STEP_Y), hl
+
+	ld iy, (ix + 18)
+	ld (_render_ray_state + STATE_HIT), iy
+	jr .Lcast_seed_segment
+
+_render_asm_cast_wall_continue:
+	call __frameset0
+	ld iy, (ix + 6)
+	ld (_render_ray_state + STATE_HIT), iy
+
+.Lcast_seed_segment:
 	xor a, a
 	ld (_render_asm_axis_boundary), a
 
 	/*
-	 * Cache the exact sub-cell distance to each next boundary (qx/qy) and
-	 * the positive ray-component magnitudes.  The generic DDA compares
+	 * Cache the exact sub-cell distance to each next boundary (qx/qy).  The
+	 * persistent positive magnitudes let the generic DDA compare
 	 * qx/abs(ray_x) with qy/abs(ray_y) by cross multiplication, so reciprocal
 	 * rounding can no longer change which grid face owns a ray.
 	 */
 	ld hl, 0
-	ld l, (ix + 6)
-	bit 7, (ix + 14)
+	ld a, (_render_ray_state + STATE_ORIGIN_X)
+	ld l, a
+	ld a, (_render_ray_state + STATE_RAY_X + 2)
+	bit 7, a
 	jr nz, .Lsetup_qx_store
 	ld a, l
 	neg
@@ -73,21 +173,13 @@ _render_asm_cast_wall:
 	jr nz, .Lsetup_qx_store
 	inc h
 .Lsetup_qx_store:
-	ld (_render_asm_qx), hl
-
-	ld hl, (ix + 12)
-	bit 7, (ix + 14)
-	jr z, .Lsetup_abs_x_store
-	ex de, hl
-	ld hl, 0
-	or a, a
-	sbc hl, de
-.Lsetup_abs_x_store:
-	ld (_render_asm_abs_x), hl
+	ld (_render_ray_state + STATE_QX), hl
 
 	ld hl, 0
-	ld l, (ix + 9)
-	bit 7, (ix + 17)
+	ld a, (_render_ray_state + STATE_ORIGIN_Y)
+	ld l, a
+	ld a, (_render_ray_state + STATE_RAY_Y + 2)
+	bit 7, a
 	jr nz, .Lsetup_qy_store
 	ld a, l
 	neg
@@ -95,28 +187,17 @@ _render_asm_cast_wall:
 	jr nz, .Lsetup_qy_store
 	inc h
 .Lsetup_qy_store:
-	ld (_render_asm_qy), hl
+	ld (_render_ray_state + STATE_QY), hl
 
-	ld hl, (ix + 15)
-	bit 7, (ix + 17)
-	jr z, .Lsetup_abs_y_store
-	ex de, hl
-	ld hl, 0
+	ld hl, (_render_ray_state + STATE_RAY_X)
+	ld de, 0
 	or a, a
 	sbc hl, de
-.Lsetup_abs_y_store:
-	ld (_render_asm_abs_y), hl
-
-	/* The supplied reciprocal deltas remain in the restored ABI frame for
-	 * post-hit projection; avoid copying them through global scratch. */
-	ld a, (ix + 12)
-	or a, (ix + 13)
-	or a, (ix + 14)
 	jr nz, .Lsetup_y
 	/* A vertical ray on an exact X boundary touches either column only at
 	 * zero area.  The axis-only loop below therefore requires both adjacent
 	 * columns to be solid before accepting a hit. */
-	ld a, (ix + 6)
+	ld a, (_render_ray_state + STATE_ORIGIN_X)
 	or a, a
 	jr nz, .Lsetup_y
 	ld a, 2
@@ -124,12 +205,13 @@ _render_asm_cast_wall:
 
 	/* Y reciprocal delta and exact-axis-boundary detection. */
 .Lsetup_y:
-	ld a, (ix + 15)
-	or a, (ix + 16)
-	or a, (ix + 17)
+	ld hl, (_render_ray_state + STATE_RAY_Y)
+	ld de, 0
+	or a, a
+	sbc hl, de
 	jr nz, .Lsetup_error
 	/* Symmetric horizontal-boundary ownership. */
-	ld a, (ix + 9)
+	ld a, (_render_ray_state + STATE_ORIGIN_Y)
 	or a, a
 	jr nz, .Lsetup_error
 	ld a, 1
@@ -140,12 +222,12 @@ _render_asm_cast_wall:
 	ld a, (_render_asm_axis_boundary)
 	or a, a
 	jr nz, .Lsetup_map
-	ld hl, (_render_asm_qx)
-	ld bc, (_render_asm_abs_y)
+	ld hl, (_render_ray_state + STATE_QX)
+	ld bc, (_render_ray_state + STATE_ABS_Y)
 	call .Lmul_q_component
 	push hl
-	ld hl, (_render_asm_qy)
-	ld bc, (_render_asm_abs_x)
+	ld hl, (_render_ray_state + STATE_QY)
+	ld bc, (_render_ray_state + STATE_ABS_X)
 	call .Lmul_q_component
 	ex de, hl
 	pop hl
@@ -153,40 +235,32 @@ _render_asm_cast_wall:
 	sbc hl, de
 	/* U = E + Ax is non-negative:
 	 * qx*Ay + (256-qy)*Ax. Preserve U and T=Ax+Ay across map setup. */
-	ld de, (_render_asm_abs_x_shift)
+	ld de, (_render_ray_state + STATE_ABS_X_SHIFT)
 	add hl, de
 	push hl
-	ld hl, (_render_asm_abs_x_shift)
-	ld de, (_render_asm_abs_y_shift)
-	add hl, de
+	ld hl, (_render_ray_state + STATE_THRESHOLD)
 	push hl
 
 	/* Build the map pointer once; shadow BC/DE retain signed Y/X steps. */
 .Lsetup_map:
 	ld hl, 0
-	ld l, (ix + 21)
-	add hl, hl
-	add hl, hl
-	add hl, hl
-	add hl, hl
-	ld de, 0
-	ld e, (ix + 18)
-	add hl, de
+	ld a, (_render_ray_state + STATE_ORIGIN_Y + 1)
+	rlca
+	rlca
+	rlca
+	rlca
+	and a, 0xF0
+	ld l, a
+	ld a, (_render_ray_state + STATE_ORIGIN_X + 1)
+	add a, l
+	ld l, a
 	ld de, _render_wall_map
 	add hl, de
 	push hl
 	exx
 	pop hl
-	ld bc, 16
-	ld de, 1
-	bit 7, (ix + 17)
-	jr z, .Lsetup_map_y_step_ready
-	ld bc, -16
-.Lsetup_map_y_step_ready:
-	bit 7, (ix + 14)
-	jr z, .Lsetup_map_x_step_ready
-	ld de, -1
-.Lsetup_map_x_step_ready:
+	ld bc, (_render_ray_state + STATE_MAP_STEP_Y)
+	ld de, (_render_ray_state + STATE_MAP_STEP_X)
 	exx
 
 	/* Exact-axis boundary rays are rare, but a normal half-open DDA would
@@ -205,7 +279,7 @@ _render_asm_cast_wall:
 	pop bc
 	pop hl
 	/* DE=Ay, BC=T=Ax+Ay, and HL=U. */
-	ld de, (_render_asm_abs_y_shift)
+	ld de, (_render_ray_state + STATE_ABS_Y_SHIFT)
 	jr .Ldda_begin
 
 	/* Horizontal ray: advance X and test both rows.  For a zero Y ray the
@@ -318,13 +392,11 @@ _render_asm_cast_wall:
 .Lhit_x:
 	xor a, a
 	ld (iy + RAY_SIDE), a
-	ld a, (ix + 14)
+	ld a, (_render_ray_state + STATE_RAY_X + 2)
 	rlca
 	and a, 1
 	ld (iy + RAY_WALL_DIRECTION), a
-	add a, a
-	neg
-	inc a
+	ld a, (_render_ray_state + STATE_MAP_STEP_X)
 	ld (iy + RAY_STEP_X), a
 	jr .Lstore_hit
 
@@ -332,16 +404,20 @@ _render_asm_cast_wall:
 .Lhit_y:
 	ld a, 1
 	ld (iy + RAY_SIDE), a
-	ld a, (ix + 17)
+	ld a, (_render_ray_state + STATE_RAY_Y + 2)
 	rlca
 	and a, 1
-	ld b, a
 	add a, DIR_WEST
 	ld (iy + RAY_WALL_DIRECTION), a
-	ld a, b
-	add a, a
-	neg
-	inc a
+	ld a, (_render_ray_state + STATE_MAP_STEP_Y)
+	/* The low byte of +/-16 has the sign needed by the RayHit field. */
+	bit 7, a
+	jr z, .Lhit_y_positive_step
+	ld a, -1
+	jr .Lhit_y_step_ready
+.Lhit_y_positive_step:
+	ld a, 1
+.Lhit_y_step_ready:
 	ld (iy + RAY_STEP_Y), a
 
 .Lstore_hit:
@@ -376,19 +452,21 @@ _render_asm_cast_wall:
 	or a, a
 	jr nz, .Ldistance_rebuild_y
 
-	ld hl, (ix + 27)
-	ld bc, (_render_asm_qx)
+	ld hl, (_render_ray_state + STATE_DELTA_X)
+	ld bc, (_render_ray_state + STATE_QX)
 	ld a, b
 	or a, a
 	jr nz, .Ldistance_initial_x_ready
 	ld a, c
 	call .Lscale_delta_8
 .Ldistance_initial_x_ready:
-	ld de, (ix + 27)
+	ld de, (_render_ray_state + STATE_DELTA_X)
 	ld a, (iy + RAY_MAP_X)
-	ld b, (ix + 18)
 	ld c, a
-	bit 7, (ix + 14)
+	ld a, (_render_ray_state + STATE_ORIGIN_X + 1)
+	ld b, a
+	ld a, (_render_ray_state + STATE_RAY_X + 2)
+	bit 7, a
 	ld a, c
 	jr z, .Ldistance_x_positive
 	ld a, b
@@ -399,19 +477,21 @@ _render_asm_cast_wall:
 	jr .Ldistance_count_ready
 
 .Ldistance_rebuild_y:
-	ld hl, (ix + 30)
-	ld bc, (_render_asm_qy)
+	ld hl, (_render_ray_state + STATE_DELTA_Y)
+	ld bc, (_render_ray_state + STATE_QY)
 	ld a, b
 	or a, a
 	jr nz, .Ldistance_initial_y_ready
 	ld a, c
 	call .Lscale_delta_8
 .Ldistance_initial_y_ready:
-	ld de, (ix + 30)
+	ld de, (_render_ray_state + STATE_DELTA_Y)
 	ld a, (iy + RAY_MAP_Y)
-	ld b, (ix + 21)
 	ld c, a
-	bit 7, (ix + 17)
+	ld a, (_render_ray_state + STATE_ORIGIN_Y + 1)
+	ld b, a
+	ld a, (_render_ray_state + STATE_RAY_Y + 2)
+	bit 7, a
 	ld a, c
 	jr z, .Ldistance_y_positive
 	ld a, b
@@ -443,25 +523,155 @@ _render_asm_cast_wall:
 	jr nz, .Lwall_position_y
 
 	/* X wall position uses origin_y + distance * ray_y / 256. */
-	ld bc, (ix + 15)
+	ld bc, (_render_ray_state + STATE_RAY_Y)
 	call .Lmul_distance_ray
-	ld de, (ix + 9)
+	ld de, (_render_ray_state + STATE_ORIGIN_Y)
 	add hl, de
 	jr .Lwall_position_store
 
 	/* Y wall position uses origin_x + distance * ray_x / 256. */
 .Lwall_position_y:
-	ld bc, (ix + 12)
+	ld bc, (_render_ray_state + STATE_RAY_X)
 	call .Lmul_distance_ray
-	ld de, (ix + 6)
+	ld de, (_render_ray_state + STATE_ORIGIN_X)
 	add hl, de
 
 .Lwall_position_store:
-	ld iy, (ix + 24)
+	ld iy, (_render_ray_state + STATE_HIT)
 	ld (iy + RAY_WALL_POSITION), hl
 	ld a, l
 	ld (iy + RAY_WALL_U), a
+	call .Lstate_resolve_portal
 	pop ix
+	ret
+
+	/*
+	 * Resolve the wall face while the hit is still resident in IY.  The old
+	 * path returned to C, repeated the tile key, pushed seven ABI slots, and
+	 * entered _render_asm_find_portal.  C caches the two dynamic portal tile
+	 * keys once per render/placement trace; ordinary walls therefore retain
+	 * the same three-lookup fast rejection, while candidate faces leave the
+	 * linked exit directly beside the persistent DDA state.
+	 */
+.Lstate_resolve_portal:
+	xor a, a
+	ld (_render_ray_state + STATE_PORTAL_KIND), a
+	ld (_render_ray_state + STATE_PORTAL_HAS_EXIT), a
+
+	ld a, (iy + RAY_WALL_DIRECTION)
+	ld b, a
+	ld a, (iy + RAY_MAP_Y)
+	add a, a
+	add a, a
+	add a, a
+	add a, a
+	add a, (iy + RAY_MAP_X)
+	ld c, a
+
+	ld a, (_render_ray_state + STATE_PRIMARY_TILE)
+	cp a, c
+	jr z, .Lstate_portal_try_primary
+	ld a, (_render_ray_state + STATE_SECONDARY_TILE)
+	cp a, c
+	jr z, .Lstate_portal_try_secondary_load
+	jr .Lstate_portal_try_builtin
+
+.Lstate_portal_try_primary:
+	push iy
+	ld iy, (_render_ray_state + STATE_GAME)
+	ld a, (iy + 10)
+	cp a, b
+	jr nz, .Lstate_portal_try_secondary_loaded
+	ld a, 1
+	ld (_render_ray_state + STATE_PORTAL_KIND), a
+	ld a, (iy + 15)
+	or a, a
+	jr z, .Lstate_portal_dynamic_return
+	ld hl, (iy + 12)
+	ld (_render_ray_state + STATE_PORTAL_EXIT), hl
+	ld a, (iy + 15)
+	ld (_render_ray_state + STATE_PORTAL_EXIT + 3), a
+	ld a, 10
+	ld (_render_ray_state + STATE_PORTAL_ID), a
+	jr .Lstate_portal_dynamic_found
+
+.Lstate_portal_try_secondary_loaded:
+	ld a, (_render_ray_state + STATE_SECONDARY_TILE)
+	cp a, c
+	jr nz, .Lstate_portal_builtin_after_dynamic
+	ld a, (iy + 14)
+	cp a, b
+	jr nz, .Lstate_portal_builtin_after_dynamic
+	jr .Lstate_portal_secondary_match
+
+.Lstate_portal_try_secondary_load:
+	push iy
+	ld iy, (_render_ray_state + STATE_GAME)
+	ld a, (iy + 14)
+	cp a, b
+	jr nz, .Lstate_portal_builtin_after_dynamic
+
+.Lstate_portal_secondary_match:
+	ld a, 2
+	ld (_render_ray_state + STATE_PORTAL_KIND), a
+	ld a, (iy + 11)
+	or a, a
+	jr z, .Lstate_portal_dynamic_return
+	ld hl, (iy + 8)
+	ld (_render_ray_state + STATE_PORTAL_EXIT), hl
+	ld a, (iy + 11)
+	ld (_render_ray_state + STATE_PORTAL_EXIT + 3), a
+	ld a, 11
+	ld (_render_ray_state + STATE_PORTAL_ID), a
+
+.Lstate_portal_dynamic_found:
+	ld a, 1
+	ld (_render_ray_state + STATE_PORTAL_HAS_EXIT), a
+.Lstate_portal_dynamic_return:
+	pop iy
+	ret
+
+.Lstate_portal_builtin_after_dynamic:
+	pop iy
+
+.Lstate_portal_try_builtin:
+	ld hl, _render_builtin_portal_by_tile
+	ld de, 0
+	ld e, c
+	add hl, de
+	ld a, (hl)
+	or a, a
+	ret z
+	dec a
+	ld c, a
+	ld de, 0
+	ld d, 6
+	ld e, a
+	mlt de
+	ld hl, _render_builtin_portals
+	add hl, de
+	inc hl
+	inc hl
+	ld a, (hl)
+	cp a, b
+	ret nz
+	inc hl
+	ld a, (hl)
+	ld (_render_ray_state + STATE_PORTAL_EXIT), a
+	inc hl
+	ld a, (hl)
+	ld (_render_ray_state + STATE_PORTAL_EXIT + 1), a
+	inc hl
+	ld a, (hl)
+	ld (_render_ray_state + STATE_PORTAL_EXIT + 2), a
+	ld a, 1
+	ld (_render_ray_state + STATE_PORTAL_EXIT + 3), a
+	ld a, 3
+	ld (_render_ray_state + STATE_PORTAL_KIND), a
+	ld a, c
+	ld (_render_ray_state + STATE_PORTAL_ID), a
+	ld a, 1
+	ld (_render_ray_state + STATE_PORTAL_HAS_EXIT), a
 	ret
 
 	/*
@@ -576,63 +786,42 @@ _render_asm_cast_wall:
 	sbc hl, de
 	ret
 
-	.size _render_asm_cast_wall, .-_render_asm_cast_wall
-
-	.section .text._render_asm_delta_pair,"ax",@progbits
-	.global _render_asm_delta_pair
-	.type _render_asm_delta_pair, @function
-
 /*
- * Resolve both positive reciprocal DDA deltas with one C ABI transition.
- * Stack slots after __frameset0: ix+6 ray_x, ix+9 ray_y, ix+12 output.
+ * Initialize one persistent component. A is the sign byte, HL is signed,
+ * and IY points at the state's packed uint16_t magnitude. Return the positive
+ * reciprocal delta in HL.
  */
-_render_asm_delta_pair:
-	call __frameset0
-	ld iy, (ix + 12)
-
-	ld hl, (ix + 6)
-	ld a, (ix + 8)
-	call .Ldelta_pair_component
-	ld (iy), hl
-
-	ld hl, (ix + 9)
-	ld a, (ix + 11)
-	call .Ldelta_pair_component
-	ld (iy + 3), hl
-
-	pop ix
-	ret
-
-/* A is the sign byte and HL is a signed 24-bit component. */
-.Ldelta_pair_component:
+.Lstate_component_init:
 	bit 7, a
-	jr z, .Ldelta_pair_magnitude
+	jr z, .Lstate_component_magnitude
 	ex de, hl
 	or a, a
 	sbc hl, hl
 	sbc hl, de
 
-.Ldelta_pair_magnitude:
+.Lstate_component_magnitude:
+	ld (iy), l
+	ld (iy + 1), h
 	ld de, 0
 	or a, a
 	sbc hl, de
-	jr z, .Ldelta_pair_zero
+	jr z, .Lstate_component_zero
 
 	dec hl
-	jr z, .Ldelta_pair_one
+	jr z, .Lstate_component_one
 	inc hl
 
 	ld de, 425
 	or a, a
 	sbc hl, de
-	jr c, .Ldelta_pair_under_limit
+	jr c, .Lstate_component_under_limit
 	ld hl, 425
-	jr .Ldelta_pair_lookup
+	jr .Lstate_component_lookup
 
-.Ldelta_pair_under_limit:
+.Lstate_component_under_limit:
 	add hl, de
 
-.Ldelta_pair_lookup:
+.Lstate_component_lookup:
 	add hl, hl
 	ld de, _render_reciprocal_delta
 	add hl, de
@@ -644,15 +833,16 @@ _render_asm_delta_pair:
 	ld h, d
 	ret
 
-.Ldelta_pair_zero:
+.Lstate_component_zero:
 	ld hl, FIXED_INF
 	ret
 
-.Ldelta_pair_one:
+.Lstate_component_one:
 	ld hl, 65536
 	ret
 
-	.size _render_asm_delta_pair, .-_render_asm_delta_pair
+	.size _render_asm_cast_wall_begin, .-_render_asm_cast_wall_begin
+	.size _render_asm_cast_wall_continue, .-_render_asm_cast_wall_continue
 
 	.section .text._render_asm_add_projected_grid_segment,"ax",@progbits
 	.global _render_asm_add_projected_grid_segment
@@ -725,29 +915,11 @@ _render_asm_add_projected_grid_segment:
 	ld (_render_grid_far_x), hl
 
 .Lfused_grid_store:
-	ld hl, (ix + 6)
-	ld iy, (hl)
-	ld de, (_render_grid_far_x)
-	ld (iy + GRID_FAR_X), de
-	ld de, (_render_grid_near_x)
-	ld (iy + GRID_NEAR_X), de
-	ld (iy + GRID_FAR_Y), GRID_FAR_SCREEN_Y
-	ld (iy + GRID_KIND), GRID_SLANTED_NOCLIP
-	lea de, iy + 8
-	ld (hl), de
-
-	/* Push GraphX line arguments in the same order as the C implementation. */
-	ld hl, 0
-	ld l, GRID_NEAR_SCREEN_Y
-	push hl
-	ld hl, (_render_grid_near_x)
-	push hl
-	ld hl, GRID_FAR_SCREEN_Y
-	push hl
-	ld hl, (_render_grid_far_x)
-	push hl
-
-	/* The no-clip entry point requires both unsigned X values below 320. */
+	/*
+	 * Pair fully visible floor/ceiling lines in one Bresenham traversal.
+	 * A specialized path below reproduces GraphX's sequential clipping for
+	 * lines that cross either X edge.
+	 */
 	ld de, 320
 	ld hl, (_render_grid_far_x)
 	or a, a
@@ -757,22 +929,799 @@ _render_asm_add_projected_grid_segment:
 	or a, a
 	sbc hl, de
 	jr nc, .Lfused_grid_draw_clipped
-	call _gfx_Line_NoClip
-	jr .Lfused_grid_line_done
+	call .Lgrid_draw_pair_noclip
+	jp .Lfused_grid_return
 
 .Lfused_grid_draw_clipped:
-	ld (iy + GRID_KIND), GRID_SLANTED_CLIPPED
-	call _gfx_Line
+	/*
+	 * Both original Y ranges are already inside the clip rectangle, and a
+	 * clipped endpoint is a convex interpolation of them. Therefore GraphX's
+	 * Cohen-Sutherland loop can only visit RIGHT or LEFT here. It always clips
+	 * endpoint 1 first, then endpoint 0 using the already-rounded endpoint 1.
+	 */
+	ld a, GRID_FAR_SCREEN_Y
+	ld (_render_grid_floor_y0), a
+	ld a, GRID_NEAR_SCREEN_Y
+	ld (_render_grid_floor_y1), a
+	ld a, GRID_CEILING_FAR_SCREEN_Y
+	ld (_render_grid_ceiling_y0), a
+	ld a, GRID_CEILING_NEAR_SCREEN_Y
+	ld (_render_grid_ceiling_y1), a
 
-.Lfused_grid_line_done:
-	pop hl
-	pop hl
-	pop hl
-	pop hl
+	/* Match GraphX's endpoint-1-first outcode selection. */
+	ld a, (_render_grid_near_x + 2)
+	bit 7, a
+	jr nz, .Lgrid_clip_near_left
+	ld hl, (_render_grid_near_x)
+	ld de, 320
+	or a, a
+	sbc hl, de
+	jr c, .Lgrid_clip_far_check
+	ld hl, 319
+	jr .Lgrid_clip_near
+.Lgrid_clip_near_left:
+	ld hl, 0
+.Lgrid_clip_near:
+	ld (_render_grid_clip_bound), hl
+	call .Lgrid_clip_pair_endpoint
+	ld hl, (_render_grid_clip_bound)
+	ld (_render_grid_near_x), hl
+	ld a, (_render_grid_clip_floor_result)
+	ld (_render_grid_floor_y1), a
+	ld a, (_render_grid_clip_ceiling_result)
+	ld (_render_grid_ceiling_y1), a
+
+.Lgrid_clip_far_check:
+	ld a, (_render_grid_far_x + 2)
+	bit 7, a
+	jr nz, .Lgrid_clip_far_left
+	ld hl, (_render_grid_far_x)
+	ld de, 320
+	or a, a
+	sbc hl, de
+	jr c, .Lgrid_clipped_draw
+	ld hl, 319
+	jr .Lgrid_clip_far
+.Lgrid_clip_far_left:
+	ld hl, 0
+.Lgrid_clip_far:
+	ld (_render_grid_clip_bound), hl
+	call .Lgrid_clip_pair_endpoint
+	ld hl, (_render_grid_clip_bound)
+	ld (_render_grid_far_x), hl
+	ld a, (_render_grid_clip_floor_result)
+	ld (_render_grid_floor_y0), a
+	ld a, (_render_grid_clip_ceiling_result)
+	ld (_render_grid_ceiling_y0), a
+
+.Lgrid_clipped_draw:
+	/*
+	 * Draw both already-clipped lines locally. The helper is a direct
+	 * translation of GraphX gfx_Line_NoClip, without its ABI transition,
+	 * draw-buffer wait, or mutable global color lookup.
+	 */
+	ld a, GRID_FLOOR_COLOR
+	ld (.Lgrid_dynamic_horizontal_color + 1), a
+	ld (.Lgrid_dynamic_vertical_color + 1), a
+	ld (.Lgrid_run_packed_color + 1), a
+	ld (.Lgrid_run_packed_color + 2), a
+	ld (.Lgrid_run_packed_color + 3), a
+	ld hl, (_render_grid_far_x)
+	ld de, (_render_grid_near_x)
+	ld a, (_render_grid_floor_y0)
+	ld b, a
+	ld a, (_render_grid_floor_y1)
+	call .Lgrid_draw_dynamic_noclip
+
+	ld a, GRID_CEILING_COLOR
+	ld (.Lgrid_dynamic_horizontal_color + 1), a
+	ld (.Lgrid_dynamic_vertical_color + 1), a
+	ld (.Lgrid_run_packed_color + 1), a
+	ld (.Lgrid_run_packed_color + 2), a
+	ld (.Lgrid_run_packed_color + 3), a
+	ld hl, (_render_grid_far_x)
+	ld de, (_render_grid_near_x)
+	ld a, (_render_grid_ceiling_y0)
+	ld b, a
+	ld a, (_render_grid_ceiling_y1)
+	call .Lgrid_draw_dynamic_noclip
 
 .Lfused_grid_return:
 	pop ix
 	ret
+
+/*
+ * Clip one shared-X floor/ceiling endpoint to _render_grid_clip_bound.
+ *
+ * Floor Y is monotone increasing and ceiling Y is monotone decreasing:
+ *   floor   = f0 + floor(a*n/d)
+ *   ceiling = c0 - ceil(b*n/d)
+ * where n=abs(bound-x0), d=abs(x1-x0), a=f1-f0, b=c0-c1.
+ *
+ * Initially a==b. After endpoint 1 has been rounded, b is either a or a+1.
+ * The quotient and remainder of a*n/d therefore derive the ceiling result
+ * exactly too, including GraphX's signed floor rounding, with one division.
+ */
+.Lgrid_clip_pair_endpoint:
+	/* n = abs(bound - x0). */
+	ld hl, (_render_grid_clip_bound)
+	ld de, (_render_grid_far_x)
+	or a, a
+	sbc hl, de
+	bit 7, h
+	jr z, .Lgrid_clip_n_ready
+	ex de, hl
+	or a, a
+	sbc hl, hl
+	sbc hl, de
+.Lgrid_clip_n_ready:
+	ld (_render_grid_clip_n), hl
+
+	/* d = abs(x1 - x0). Retained clipped lines always have d>0. */
+	ld hl, (_render_grid_near_x)
+	ld de, (_render_grid_far_x)
+	or a, a
+	sbc hl, de
+	bit 7, h
+	jr z, .Lgrid_clip_d_ready
+	ex de, hl
+	or a, a
+	sbc hl, hl
+	sbc hl, de
+.Lgrid_clip_d_ready:
+	ld (_render_grid_clip_d), hl
+
+	ld a, (_render_grid_floor_y0)
+	ld b, a
+	ld a, (_render_grid_floor_y1)
+	sub a, b
+	ld (_render_grid_clip_floor_delta), a
+
+	ld a, (_render_grid_ceiling_y1)
+	ld b, a
+	ld a, (_render_grid_ceiling_y0)
+	sub a, b
+	ld (_render_grid_clip_ceiling_delta), a
+
+	/* HL = a*n, then A=floor(a*n/d), HL=(a*n)%d. */
+	ld a, (_render_grid_clip_floor_delta)
+	ld hl, (_render_grid_clip_n)
+	call .Lgrid_mul_u8_u16
+	ld bc, (_render_grid_clip_d)
+	call .Lgrid_div_u7
+	ld (_render_grid_clip_quotient), a
+	ld (_render_grid_clip_remainder), hl
+
+	ld b, a
+	ld a, (_render_grid_floor_y0)
+	add a, b
+	ld (_render_grid_clip_floor_result), a
+
+	/* Derive ceil(b*n/d) from q/remainder; b-a is exactly zero or one. */
+	ld a, (_render_grid_clip_quotient)
+	ld (_render_grid_clip_ceiling_magnitude), a
+	ld a, (_render_grid_clip_floor_delta)
+	ld b, a
+	ld a, (_render_grid_clip_ceiling_delta)
+	cp a, b
+	jr z, .Lgrid_clip_ceiling_remainder_ready
+
+	ld hl, (_render_grid_clip_remainder)
+	ld de, (_render_grid_clip_n)
+	add hl, de
+	ld bc, (_render_grid_clip_d)
+	or a, a
+	sbc hl, bc
+	jr nc, .Lgrid_clip_ceiling_wrap
+	add hl, bc
+	jr .Lgrid_clip_ceiling_store_remainder
+.Lgrid_clip_ceiling_wrap:
+	ld a, (_render_grid_clip_ceiling_magnitude)
+	inc a
+	ld (_render_grid_clip_ceiling_magnitude), a
+.Lgrid_clip_ceiling_store_remainder:
+	ld (_render_grid_clip_remainder), hl
+
+.Lgrid_clip_ceiling_remainder_ready:
+	ld hl, (_render_grid_clip_remainder)
+	ld de, 0
+	or a, a
+	sbc hl, de
+	jr z, .Lgrid_clip_ceiling_magnitude_ready
+	ld a, (_render_grid_clip_ceiling_magnitude)
+	inc a
+	ld (_render_grid_clip_ceiling_magnitude), a
+.Lgrid_clip_ceiling_magnitude_ready:
+	ld a, (_render_grid_clip_ceiling_magnitude)
+	ld b, a
+	ld a, (_render_grid_ceiling_y0)
+	sub a, b
+	ld (_render_grid_clip_ceiling_result), a
+	ret
+
+/*
+ * A=unsigned 8-bit multiplicand, HL=unsigned 16-bit multiplicand.
+ * Return their exact <=20-bit product in HL using two native 8x8 MLTs.
+ */
+.Lgrid_mul_u8_u16:
+	ld bc, 0
+	ld b, a
+	ld c, l
+	mlt bc
+	ld de, 0
+	ld d, a
+	ld e, h
+	mlt de
+	ex de, hl
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	push bc
+	pop de
+	add hl, de
+	ret
+
+/*
+ * Divide HL by positive BC when the quotient is known to be 0..127.
+ * Return quotient in A and remainder in HL. Seven trial subtractions replace
+ * GraphX's general 24-step signed divider.
+ */
+.Lgrid_div_u7:
+	push hl
+	pop de
+	push bc
+	push bc
+	pop hl
+	add hl, hl
+	push hl
+	pop bc
+	push bc
+	push bc
+	pop hl
+	add hl, hl
+	push hl
+	pop bc
+	push bc
+	push bc
+	pop hl
+	add hl, hl
+	push hl
+	pop bc
+	push bc
+	push bc
+	pop hl
+	add hl, hl
+	push hl
+	pop bc
+	push bc
+	push bc
+	pop hl
+	add hl, hl
+	push hl
+	pop bc
+	push bc
+	push bc
+	pop hl
+	add hl, hl
+	push hl
+	pop bc
+	push bc
+	push de
+	pop hl
+	xor a, a
+
+	pop bc
+	or a, a
+	sbc hl, bc
+	jr nc, .Lgrid_div_bit6
+	add hl, bc
+	jr .Lgrid_div_next5
+.Lgrid_div_bit6:
+	or a, 64
+.Lgrid_div_next5:
+	pop bc
+	or a, a
+	sbc hl, bc
+	jr nc, .Lgrid_div_bit5
+	add hl, bc
+	jr .Lgrid_div_next4
+.Lgrid_div_bit5:
+	or a, 32
+.Lgrid_div_next4:
+	pop bc
+	or a, a
+	sbc hl, bc
+	jr nc, .Lgrid_div_bit4
+	add hl, bc
+	jr .Lgrid_div_next3
+.Lgrid_div_bit4:
+	or a, 16
+.Lgrid_div_next3:
+	pop bc
+	or a, a
+	sbc hl, bc
+	jr nc, .Lgrid_div_bit3
+	add hl, bc
+	jr .Lgrid_div_next2
+.Lgrid_div_bit3:
+	or a, 8
+.Lgrid_div_next2:
+	pop bc
+	or a, a
+	sbc hl, bc
+	jr nc, .Lgrid_div_bit2
+	add hl, bc
+	jr .Lgrid_div_next1
+.Lgrid_div_bit2:
+	or a, 4
+.Lgrid_div_next1:
+	pop bc
+	or a, a
+	sbc hl, bc
+	jr nc, .Lgrid_div_bit1
+	add hl, bc
+	jr .Lgrid_div_next0
+.Lgrid_div_bit1:
+	or a, 2
+.Lgrid_div_next0:
+	pop bc
+	or a, a
+	sbc hl, bc
+	jr nc, .Lgrid_div_bit0
+	add hl, bc
+	ret
+.Lgrid_div_bit0:
+	or a, 1
+	ret
+
+/*
+ * Draw one in-bounds line exactly like GraphX gfx_Line_NoClip.
+ * Inputs: HL=x0, B=y0, DE=x1, A=y1. The two pixel-color immediates are
+ * patched by the caller for the floor and ceiling passes.
+ */
+.Lgrid_draw_dynamic_noclip:
+	or a, a
+	sbc hl, de
+	add hl, de
+	jr c, .Lgrid_dynamic_left_to_right
+	ex de, hl
+	ld c, a
+	ld a, b
+	ld b, c
+.Lgrid_dynamic_left_to_right:
+	sub a, b
+	ld iy, 320
+	jr nc, .Lgrid_dynamic_positive_dy
+	ld iy, -320
+	neg
+.Lgrid_dynamic_positive_dy:
+	push hl
+	ld hl, (0xE30014)
+	ld c, 160
+	mlt bc
+	add hl, bc
+	add hl, bc
+	pop bc
+	add hl, bc
+	push hl
+	ex de, hl
+	or a, a
+	sbc hl, bc
+	push hl
+	pop bc
+
+	or a, a
+	sbc hl, hl
+	ld l, a
+	sbc hl, bc
+	add hl, bc
+	jp nc, .Lgrid_dynamic_vertical
+
+	/*
+	 * Shallow clipped lines are much wider than they are tall.  Skip between
+	 * exact Bresenham Y corrections and emit each horizontal run with packed
+	 * three-byte stores.  Steeper lines retain the very small CPI loop below.
+	 */
+	ld a, l
+	or a, a
+	jr z, .Lgrid_dynamic_standard_horizontal
+	push hl
+	add hl, hl
+	pop de
+	add hl, de
+	or a, a
+	sbc hl, bc
+	jp c, .Lgrid_dynamic_run_setup
+	jp z, .Lgrid_dynamic_run_setup
+	ex de, hl
+
+.Lgrid_dynamic_standard_horizontal:
+	ld a, l
+	or a, h
+	ld a, 0x38
+	jr nz, .Lgrid_dynamic_dy_nonzero
+	xor a, 0x20
+.Lgrid_dynamic_dy_nonzero:
+	ld (.Lgrid_dynamic_error_jump), a
+	ld (.Lgrid_dynamic_width + 1), iy
+	ex de, hl
+	sbc hl, hl
+	sbc hl, de
+	ld (.Lgrid_dynamic_dx + 1), bc
+	ld (.Lgrid_dynamic_dy + 1), hl
+	ex de, hl
+	pop hl
+	push bc
+	srl b
+	rr c
+	push bc
+	pop iy
+	pop bc
+	inc bc
+.Lgrid_dynamic_horizontal_color:
+	ld a, 0
+.Lgrid_dynamic_horizontal_loop:
+	ld (hl), a
+	cpi
+	ret po
+	add iy, de
+.Lgrid_dynamic_error_jump:
+	jr c, .Lgrid_dynamic_horizontal_loop
+.Lgrid_dynamic_width:
+	ld de, 0
+	add hl, de
+.Lgrid_dynamic_dx:
+	ld de, 0
+	add iy, de
+.Lgrid_dynamic_dy:
+	ld de, 0
+	jr .Lgrid_dynamic_horizontal_loop
+
+/*
+ * Inputs are BC=dx, DE=dy, IY=signed row stride, with the start pointer on
+ * the stack.  The branch above guarantees dx>=3*dy and dy>0.
+ *
+ * For GraphX's strict-underflow Bresenham recurrence:
+ *   q=dx/dy, r=dx%dy
+ *   first=q/2+1, t=first*dy-floor(dx/2)
+ * Every middle Y-run then contains q pixels, or q+1 when t<=r.  Updating
+ * t modulo dy reproduces every correction point exactly; the final run is
+ * simply the still-unwritten pixel count.
+ */
+.Lgrid_dynamic_run_setup:
+	ex de, hl
+	ld a, l
+	ld (_render_grid_clip_floor_delta), a
+	dec a
+	ld (_render_grid_clip_ceiling_result), a
+
+	/* Exact unsigned dx/dy.  This executes once per line, not per pixel. */
+	push bc
+	push bc
+	pop hl
+	ld de, 0
+	ld a, (_render_grid_clip_floor_delta)
+	ld e, a
+	ld ix, 0
+.Lgrid_dynamic_run_divide:
+	or a, a
+	sbc hl, de
+	jr c, .Lgrid_dynamic_run_divide_done
+	inc ix
+	jr .Lgrid_dynamic_run_divide
+.Lgrid_dynamic_run_divide_done:
+	add hl, de
+	ld a, l
+	ld (_render_grid_clip_quotient), a
+	push ix
+	pop hl
+	ld (_render_grid_clip_n), hl
+
+	/* Preserve floor(dx/2) and the total dx+1 pixels. */
+	pop bc
+	push bc
+	srl b
+	rr c
+	ld (_render_grid_clip_bound), bc
+	pop bc
+	inc bc
+	ld (_render_grid_clip_d), bc
+
+	/* first=floor(q/2)+1 (always <=160). */
+	ld bc, (_render_grid_clip_n)
+	srl b
+	rr c
+	inc bc
+	ld a, c
+	ld (_render_grid_clip_floor_result), a
+
+	/* t=first*dy-floor(dx/2), in the exact range 1..dy. */
+	ld de, 0
+	ld d, c
+	ld a, (_render_grid_clip_floor_delta)
+	ld e, a
+	mlt de
+	push de
+	pop hl
+	ld de, (_render_grid_clip_bound)
+	or a, a
+	sbc hl, de
+	ld a, l
+	ld (_render_grid_clip_ceiling_magnitude), a
+
+	pop hl
+	ld a, (_render_grid_clip_floor_result)
+	call .Lgrid_dynamic_run_fill
+	call .Lgrid_dynamic_run_consume
+
+	ld a, (_render_grid_clip_ceiling_result)
+	or a, a
+	jr z, .Lgrid_dynamic_run_final
+
+.Lgrid_dynamic_run_middle:
+	/* Select q or q+1 and advance t=(t-r) mod dy. */
+	ld a, (_render_grid_clip_ceiling_magnitude)
+	ld b, a
+	ld a, (_render_grid_clip_quotient)
+	cp a, b
+	jr nc, .Lgrid_dynamic_run_extra
+
+	ld c, a
+	ld a, b
+	sub a, c
+	ld (_render_grid_clip_ceiling_magnitude), a
+	ld a, (_render_grid_clip_n)
+	jr .Lgrid_dynamic_run_middle_ready
+
+.Lgrid_dynamic_run_extra:
+	ld a, (_render_grid_clip_floor_delta)
+	add a, b
+	ld b, a
+	ld a, (_render_grid_clip_quotient)
+	ld c, a
+	ld a, b
+	sub a, c
+	ld (_render_grid_clip_ceiling_magnitude), a
+	ld a, (_render_grid_clip_n)
+	inc a
+
+.Lgrid_dynamic_run_middle_ready:
+	ld (_render_grid_clip_floor_result), a
+	call .Lgrid_dynamic_run_fill
+	call .Lgrid_dynamic_run_consume
+	ld a, (_render_grid_clip_ceiling_result)
+	dec a
+	ld (_render_grid_clip_ceiling_result), a
+	jr nz, .Lgrid_dynamic_run_middle
+
+.Lgrid_dynamic_run_final:
+	ld a, (_render_grid_clip_d)
+	jp .Lgrid_dynamic_run_fill
+
+/* Consume the saved run length and enter the following Y row. */
+.Lgrid_dynamic_run_consume:
+	push hl
+	ld hl, (_render_grid_clip_d)
+	ld de, 0
+	ld a, (_render_grid_clip_floor_result)
+	ld e, a
+	or a, a
+	sbc hl, de
+	ld (_render_grid_clip_d), hl
+	pop hl
+	lea de, iy + 0
+	add hl, de
+	ret
+
+/* A=1..160 pixels; return with HL advanced by exactly A bytes. */
+.Lgrid_dynamic_run_fill:
+.Lgrid_run_packed_color:
+	ld bc, 0
+	ld de, 3
+	cp a, 3
+	jr c, .Lgrid_dynamic_run_tail
+.Lgrid_dynamic_run_fill_three:
+	ld (hl), bc
+	add hl, de
+	sub a, 3
+	cp a, 3
+	jr nc, .Lgrid_dynamic_run_fill_three
+.Lgrid_dynamic_run_tail:
+	or a, a
+	ret z
+	ld (hl), c
+	inc hl
+	dec a
+	ret z
+	ld (hl), c
+	inc hl
+	ret
+
+.Lgrid_dynamic_vertical:
+	lea de, iy + 0
+	ld b, c
+	ld a, l
+	ld iyl, a
+	ld c, a
+	rra
+	inc c
+	pop hl
+.Lgrid_dynamic_vertical_loop:
+.Lgrid_dynamic_vertical_color:
+	ld (hl), 0
+	dec c
+	ret z
+	add hl, de
+	sub a, b
+	jr nc, .Lgrid_dynamic_vertical_loop
+	inc hl
+	add a, iyl
+	jr .Lgrid_dynamic_vertical_loop
+
+/*
+ * Draw an unclipped floor line and its exact Y-mirrored ceiling line.
+ * X normalization and the dx==dy vertical-major tie match GraphX exactly.
+ * The grid endpoints always have abs(dy)==111.
+ */
+.Lgrid_draw_pair_noclip:
+	ld hl, (_render_grid_far_x)
+	ld de, (_render_grid_near_x)
+	or a, a
+	sbc hl, de
+	jr c, .Lgrid_pair_far_left
+
+	/* near_x is leftmost (GraphX also swaps equal-X endpoints). */
+	ld hl, (_render_grid_far_x)
+	ld de, (_render_grid_near_x)
+	or a, a
+	sbc hl, de
+	push hl
+	push hl
+	pop bc
+	push bc
+	srl b
+	rr c
+	push bc
+	pop iy
+	pop bc
+
+	ld hl, (0xE30014)
+	ld de, GRID_CEILING_NEAR_SCREEN_Y * 320
+	add hl, de
+	ld de, (_render_grid_near_x)
+	add hl, de
+	ld de, 320
+	exx
+
+	pop bc
+	inc bc
+	ld hl, (0xE30014)
+	ld de, GRID_NEAR_SCREEN_Y * 320
+	add hl, de
+	ld de, (_render_grid_near_x)
+	add hl, de
+
+	ld a, b
+	or a, a
+	jp nz, .Lgrid_pair_horizontal_negative
+	ld a, c
+	cp a, 113
+	jp nc, .Lgrid_pair_horizontal_negative
+	ld de, -320
+	jr .Lgrid_pair_vertical
+
+.Lgrid_pair_far_left:
+	ld hl, (_render_grid_near_x)
+	ld de, (_render_grid_far_x)
+	or a, a
+	sbc hl, de
+	push hl
+	push hl
+	pop bc
+	push bc
+	srl b
+	rr c
+	push bc
+	pop iy
+	pop bc
+
+	ld hl, (0xE30014)
+	ld de, GRID_CEILING_FAR_SCREEN_Y * 320
+	add hl, de
+	ld de, (_render_grid_far_x)
+	add hl, de
+	ld de, -320
+	exx
+
+	pop bc
+	inc bc
+	ld hl, (0xE30014)
+	ld de, GRID_FAR_SCREEN_Y * 320
+	add hl, de
+	ld de, (_render_grid_far_x)
+	add hl, de
+
+	ld a, b
+	or a, a
+	jr nz, .Lgrid_pair_horizontal_positive
+	ld a, c
+	cp a, 113
+	jr nc, .Lgrid_pair_horizontal_positive
+	ld de, 320
+
+.Lgrid_pair_vertical:
+	ld b, c
+	dec b
+	ld c, 112
+	ld a, 55
+.Lgrid_pair_vertical_loop:
+	ld (hl), GRID_FLOOR_COLOR
+	exx
+	ld (hl), GRID_CEILING_COLOR
+	exx
+	dec c
+	ret z
+	add hl, de
+	exx
+	add hl, de
+	exx
+	sub a, b
+	jr nc, .Lgrid_pair_vertical_loop
+	inc hl
+	exx
+	inc hl
+	exx
+	add a, 111
+	jr .Lgrid_pair_vertical_loop
+
+.Lgrid_pair_horizontal_positive:
+	ld (hl), GRID_FLOOR_COLOR
+	inc hl
+	exx
+	ld (hl), GRID_CEILING_COLOR
+	inc hl
+	exx
+	dec bc
+	ld a, b
+	or a, c
+	ret z
+	ld de, -111
+	add iy, de
+	jr c, .Lgrid_pair_horizontal_positive
+	ld de, 320
+	add hl, de
+	exx
+	add hl, de
+	add iy, bc
+	exx
+	jr .Lgrid_pair_horizontal_positive
+
+.Lgrid_pair_horizontal_negative:
+	ld (hl), GRID_FLOOR_COLOR
+	inc hl
+	exx
+	ld (hl), GRID_CEILING_COLOR
+	inc hl
+	exx
+	dec bc
+	ld a, b
+	or a, c
+	ret z
+	ld de, -111
+	add iy, de
+	jr c, .Lgrid_pair_horizontal_negative
+	ld de, -320
+	add hl, de
+	exx
+	add hl, de
+	add iy, bc
+	exx
+	jr .Lgrid_pair_horizontal_negative
 
 .Lgrid_project_core:
 	ld (_render_grid_lateral_magnitude), hl
@@ -863,39 +1812,221 @@ _render_asm_add_projected_grid_segment:
 
 	.size _render_asm_add_projected_grid_segment, .-_render_asm_add_projected_grid_segment
 
-	.section .text._render_asm_add_horizontal_grid_segment,"ax",@progbits
-	.global _render_asm_add_horizontal_grid_segment
-	.type _render_asm_add_horizontal_grid_segment, @function
+	.section .text._render_asm_clear_background,"ax",@progbits
+	.global _render_asm_clear_background
+	.type _render_asm_clear_background, @function
 
 /*
- * Retain and draw one full-width horizontal floor-grid segment.
- * Stack slots: ix+6 end**, ix+9 screen_y.
+ * Fill the 320x240 draw buffer with a 112-row ceiling, 16-row horizon, and
+ * 112-row floor.
+ *
+ * GraphX's general gfx_FillScreen uses an unrolled PUSH loop, leaves 4000
+ * bytes below SP for interrupt handlers, and finishes that prefix with LDDR.
+ * This specialized version keeps the same strategy but switches color at both
+ * horizon edges. It writes 76,800 bytes instead of filling the whole screen
+ * and overwriting two regions. game_render has already called gfx_Wait, so a
+ * second library wait is unnecessary.
  */
-_render_asm_add_horizontal_grid_segment:
-	call __frameset0
-	ld hl, (ix + 6)
-	ld iy, (hl)
-	ld a, (ix + 9)
-	ld (iy + GRID_FAR_Y), a
-	ld (iy + GRID_KIND), GRID_HORIZONTAL
-	lea de, iy + 8
-	ld (hl), de
+_render_asm_clear_background:
+	ld iy, 0
+	add iy, sp
 
-	ld hl, 320
-	push hl
+	/* Fill the bottom 112-row floor, leaving its two-byte PUSH remainder. */
+	ld hl, (0xE30014)
+	ld bc, BACKGROUND_BUFFER_BYTES
+	add hl, bc
+	ld de, BACKGROUND_FLOOR_COLOR * 0x010101
+	ld b, BACKGROUND_FLOOR_ITERS
+	ld c, BACKGROUND_FLOOR_TAIL
+	ld sp, hl
+	call .Lbackground_push_runs
+
+	/* Complete the floor's two-byte head at its exact row boundary. */
+	dec sp
+	dec sp
 	ld hl, 0
-	ld l, (ix + 9)
-	push hl
+	add hl, sp
+	ld (hl), BACKGROUND_FLOOR_COLOR
+	inc hl
+	ld (hl), BACKGROUND_FLOOR_COLOR
+
+	/* Fill the 16-row horizon, likewise leaving its two-byte remainder. */
+	ld de, BACKGROUND_HORIZON_COLOR * 0x010101
+	ld b, BACKGROUND_HORIZON_ITERS
+	ld c, BACKGROUND_HORIZON_TAIL
+	call .Lbackground_push_runs
+	dec sp
+	dec sp
 	ld hl, 0
+	add hl, sp
+	ld (hl), BACKGROUND_HORIZON_COLOR
+	inc hl
+	ld (hl), BACKGROUND_HORIZON_COLOR
+
+	/* Fill the upper ceiling down to the interrupt-stack reserve. */
+	ld de, BACKGROUND_CEILING_COLOR * 0x010101
+	ld b, BACKGROUND_CEILING_ITERS
+	ld c, BACKGROUND_CEILING_TAIL
+	call .Lbackground_push_runs
+
+	/*
+	 * SP now points at the first ceiling byte already written. Restore the
+	 * real stack, then propagate that byte backward through the 4,001-byte
+	 * interrupt-stack reserve exactly as GraphX does.
+	 */
+	ld hl, 0
+	add hl, sp
+	ld sp, iy
 	push hl
-	call _gfx_HorizLine_NoClip
+	pop de
+	dec de
+	ld bc, BACKGROUND_INTERRUPT_BYTES
+	lddr
+	ret
+
+/*
+ * Entered with SP on VRAM, DE holding a packed color, B full iterations,
+ * and C tail pushes. POP removes CALL's return address before any pixels are
+ * written; JP returns without touching the displaced stack.
+ */
+.Lbackground_push_runs:
 	pop hl
-	pop hl
-	pop hl
+.Lbackground_push_loop:
+	.rept BACKGROUND_PUSHES_PER_ITER
+	push de
+	.endr
+	djnz .Lbackground_push_loop
+.Lbackground_push_tail:
+	push de
+	dec c
+	jr nz, .Lbackground_push_tail
+	jp (hl)
+
+	.size _render_asm_clear_background, .-_render_asm_clear_background
+
+	.section .text._render_asm_repair_horizon,"ax",@progbits
+	.global _render_asm_repair_horizon
+	.type _render_asm_repair_horizon, @function
+
+/*
+ * Restore only the horizon rows touched by the paired grid rasterizers:
+ * ceiling rows 112-113 and floor row 127.
+ */
+_render_asm_repair_horizon:
+	ld hl, (0xE30014)
+	ld de, BACKGROUND_REPAIR_TOP_OFFSET
+	add hl, de
+	ld (hl), BACKGROUND_HORIZON_COLOR
+	push hl
+	pop de
+	inc de
+	ld bc, BACKGROUND_REPAIR_TOP_BYTES - 1
+	ldir
+
+	ld hl, (0xE30014)
+	ld de, BACKGROUND_REPAIR_BOTTOM_OFFSET
+	add hl, de
+	ld (hl), BACKGROUND_HORIZON_COLOR
+	push hl
+	pop de
+	inc de
+	ld bc, BACKGROUND_REPAIR_BOTTOM_BYTES - 1
+	ldir
+	ret
+
+	.size _render_asm_repair_horizon, .-_render_asm_repair_horizon
+
+	.section .text._render_asm_draw_horizontal_grid_pair,"ax",@progbits
+	.global _render_asm_draw_horizontal_grid_pair
+	.type _render_asm_draw_horizontal_grid_pair, @function
+
+/*
+ * Draw a full-width horizontal floor/ceiling pair directly. The unused
+ * C wrapper discards its segment pointer before entering this one-argument
+ * assembly ABI. Stack slot: ix+6 screen_y.
+ *
+ * A 24-bit PUSH writes three equal-color pixels at once, so each row needs
+ * only 106 packed writes plus its two-byte head instead of a 319-iteration
+ * overlapping LDIR. Interrupts are masked only while SP points into VRAM;
+ * the caller's previous IFF2 state is restored exactly before returning.
+ */
+_render_asm_draw_horizontal_grid_pair:
+	call __frameset0
+	ld a, (ix + 6)
+
+	/* Resolve both row pointers before temporarily moving SP into VRAM. */
+	ld hl, 0
+	ld l, a
+	add hl, hl
+	add hl, hl
+	ld de, _render_screen_rows
+	add hl, de
+	ld de, (hl)
+	ld hl, (0xE30014)
+	add hl, de
+	ld (_render_grid_floor_row), hl
+
+	ld b, a
+	ld a, 240
+	sub a, b
+	ld hl, 0
+	ld l, a
+	add hl, hl
+	add hl, hl
+	ld de, _render_screen_rows
+	add hl, de
+	ld de, (hl)
+	ld hl, (0xE30014)
+	add hl, de
+	ld (_render_grid_ceiling_row), hl
+
+	/*
+	 * LD A,I records IFF2 in P/V. DI itself does not alter the flags, so the
+	 * saved AF lets the epilogue distinguish an enabled caller from one that
+	 * already had interrupts disabled.
+	 */
+	ld a, i
+	di
+	push af
+	ld iy, 0
+	add iy, sp
+
+	ld hl, (_render_grid_floor_row)
+	ld (hl), GRID_FLOOR_COLOR
+	inc hl
+	ld (hl), GRID_FLOOR_COLOR
+	ld hl, (_render_grid_floor_row)
+	ld bc, GRID_HORIZONTAL_BYTES
+	add hl, bc
+	ld sp, hl
+	ld de, GRID_FLOOR_COLOR * 0x010101
+	.rept GRID_HORIZONTAL_PUSHES
+	push de
+	.endr
+
+	ld hl, (_render_grid_ceiling_row)
+	ld (hl), GRID_CEILING_COLOR
+	inc hl
+	ld (hl), GRID_CEILING_COLOR
+	ld hl, (_render_grid_ceiling_row)
+	ld bc, GRID_HORIZONTAL_BYTES
+	add hl, bc
+	ld sp, hl
+	ld de, GRID_CEILING_COLOR * 0x010101
+	.rept GRID_HORIZONTAL_PUSHES
+	push de
+	.endr
+
+	ld sp, iy
+	pop af
+	jp po, .Lhorizontal_grid_interrupts_restored
+	ei
+.Lhorizontal_grid_interrupts_restored:
+
 	pop ix
 	ret
 
-	.size _render_asm_add_horizontal_grid_segment, .-_render_asm_add_horizontal_grid_segment
+	.size _render_asm_draw_horizontal_grid_pair, .-_render_asm_draw_horizontal_grid_pair
 
 	.section .text._render_asm_find_portal,"ax",@progbits
 	.global _render_asm_find_portal
@@ -1039,126 +2170,85 @@ _render_asm_find_portal:
 
 	.section .text._render_asm_transform_ray,"ax",@progbits
 	.global _render_asm_transform_ray
+	.global _render_asm_transform_ray_state
 	.type _render_asm_transform_ray, @function
+	.type _render_asm_transform_ray_state, @function
 
 /* Transform a ray and its sub-cell origin through a linked portal. */
 _render_asm_transform_ray:
 	call __frameset0
 	ld iy, (ix + 6)
+	ld hl, (ix + 9)
+	ld (_render_transform_exit), hl
+	jr .Ltransform_ray_common
 
+/*
+ * Renderer-specialized entry. The fused DDA hit resolver already owns both
+ * pointers, so no argument slots or frame setup are needed. Push IX only to
+ * share the common epilogue with the public compatibility entry above.
+ */
+_render_asm_transform_ray_state:
+	push ix
+	ld iy, (_render_ray_state + STATE_HIT)
+	ld hl, _render_ray_state + STATE_PORTAL_EXIT
+	ld (_render_transform_exit), hl
+
+.Ltransform_ray_common:
 	/*
-	 * The DDA already computed the exact full wall position for wall_u.
-	 * Keep that tangential coordinate and synthesize the crossed normal
-	 * coordinate directly: positive entry steps land at 256, negative at 0.
-	 * This is identical to advance/subtract/cross, without two multiplies.
+	 * The exit-face overwrite discards the entry normal coordinate. Retain
+	 * only the exact wall tangent computed by the DDA; every direction pair
+	 * maps it to either tangent or 256-tangent at the exit.
 	 */
+	ld hl, (iy + RAY_WALL_POSITION)
+	ld de, 0
 	ld a, (iy + RAY_SIDE)
 	or a, a
-	jr nz, .Ltransform_local_y_wall
-
-	ld hl, 0
-	bit 7, (iy + RAY_STEP_X)
-	jr nz, .Ltransform_local_x_ready
-	ld hl, 256
-.Ltransform_local_x_ready:
-	ld (_render_transform_local_x), hl
-	ld hl, (iy + RAY_WALL_POSITION)
-	ld de, 0
+	jr nz, .Ltransform_tangent_x_wall
 	ld d, (iy + RAY_MAP_Y)
+.Ltransform_tangent_ready:
 	or a, a
 	sbc hl, de
-	ld (_render_transform_local_y), hl
-	jr .Ltransform_rotation
-
-.Ltransform_local_y_wall:
-	ld hl, (iy + RAY_WALL_POSITION)
-	ld de, 0
+	jr .Ltransform_direction_pair
+.Ltransform_tangent_x_wall:
 	ld d, (iy + RAY_MAP_X)
-	or a, a
-	sbc hl, de
-	ld (_render_transform_local_x), hl
-	ld hl, 0
-	bit 7, (iy + RAY_STEP_Y)
-	jr nz, .Ltransform_local_y_ready
-	ld hl, 256
-.Ltransform_local_y_ready:
-	ld (_render_transform_local_y), hl
+	jr .Ltransform_tangent_ready
 
-	/* rotation[entry_direction][exit_direction]. */
-.Ltransform_rotation:
+	/*
+	 * Each table byte packs the ray rotation in bits 0-1
+	 * (0, +1, 2, -1 respectively) and tangent mirroring in bit 7.
+	 */
+.Ltransform_direction_pair:
 	ld a, (iy + RAY_WALL_DIRECTION)
 	add a, a
 	add a, a
 	ld b, a
-	ld iy, (ix + 9)
+	ld iy, (_render_transform_exit)
 	ld a, (iy + 2)
 	add a, b
 	ld de, 0
 	ld e, a
-	ld hl, .Lportal_rotation_table
-	add hl, de
+	ld bc, .Lportal_transform_flags
+	ex de, hl
+	add hl, bc
 	ld a, (hl)
-	ld (_render_transform_rotation), a
+	ld (_render_transform_flags), a
+	ex de, hl
 
-	/* Rotate local coordinates. */
-	ld hl, (_render_transform_local_x)
-	ld de, (_render_transform_local_y)
-	call .Lrotate_pair
-	ld (_render_transform_local_x), hl
-	ld (_render_transform_local_y), de
-
-	/* Rotate the ray direction with the same quarter-turn. */
-	ld iy, (ix + 18)
-	ld hl, (iy)
-	ld iy, (ix + 21)
-	ld de, (iy)
-	ld a, (_render_transform_rotation)
-	call .Lrotate_pair
-	ld iy, (ix + 18)
-	ld (iy), hl
-	ld iy, (ix + 21)
-	ld (iy), de
-
-	/* Normalize the rotated sub-cell point back into [0, 256]. */
-	ld hl, (_render_transform_local_x)
-	ld de, (_render_transform_local_y)
-	ld a, (_render_transform_rotation)
-	cp a, 2
-	jr z, .Ltransform_normalize_both
-	cp a, 1
-	jr z, .Ltransform_normalize_x
-	cp a, -1
-	jr nz, .Ltransform_normalized
-	push hl
+	/* Apply the pair's exact tangent orientation without rotating a point. */
+	bit 7, a
+	jr z, .Ltransform_tangent_oriented
+	ex de, hl
 	ld hl, 256
-	add hl, de
-	ex de, hl
-	pop hl
-	jr .Ltransform_normalized
-.Ltransform_normalize_both:
-	ld bc, 256
-	add hl, bc
-	ex de, hl
-	add hl, bc
-	ex de, hl
-	jr .Ltransform_normalized
-.Ltransform_normalize_x:
-	ld bc, 256
-	add hl, bc
-.Ltransform_normalized:
+	or a, a
+	sbc hl, de
+.Ltransform_tangent_oriented:
 
-	/* Add the exit tile. */
-	ld iy, (ix + 9)
-	ld bc, 0
-	ld b, (iy)
-	add hl, bc
-	ld bc, 0
-	ld b, (iy + 1)
-	ex de, hl
-	add hl, bc
-	ex de, hl
-
-	/* Restart one fixed-point unit outside the exit face. */
+	/*
+	 * Construct the final affine origin directly. One coordinate is the
+	 * oriented tangent plus its exit tile; the other is the fixed restart
+	 * point one unit beyond the exit face.
+	 */
+	ld iy, (_render_transform_exit)
 	ld a, (iy + 2)
 	or a, a
 	jr z, .Ltransform_exit_north
@@ -1166,83 +2256,147 @@ _render_asm_transform_ray:
 	jr z, .Ltransform_exit_south
 	cp a, 2
 	jr z, .Ltransform_exit_west
-	/* East face: y = (tile_y + 1) * 256 + 1. */
+
+	/* East: x = tile_x*256+t, y = (tile_y+1)*256+1. */
+	ld de, 0
+	ld d, (iy)
+	add hl, de
 	ld de, 0
 	ld d, (iy + 1)
 	inc d
 	inc de
 	jr .Ltransform_exit_ready
 .Ltransform_exit_north:
-	/* North face: x = tile_x * 256 - 1. */
-	ld hl, 0
-	ld h, (iy)
-	dec hl
+	/* North: x = tile_x*256-1, y = tile_y*256+t. */
+	ld de, 0
+	ld d, (iy + 1)
+	add hl, de
+	ld de, 0
+	ld d, (iy)
+	dec de
+	ex de, hl
 	jr .Ltransform_exit_ready
 .Ltransform_exit_south:
-	/* South face: x = (tile_x + 1) * 256 + 1. */
-	ld hl, 0
-	ld h, (iy)
-	inc h
-	inc hl
+	/* South: x = (tile_x+1)*256+1, y = tile_y*256+t. */
+	ld de, 0
+	ld d, (iy + 1)
+	add hl, de
+	ld de, 0
+	ld d, (iy)
+	inc d
+	inc de
+	ex de, hl
 	jr .Ltransform_exit_ready
 .Ltransform_exit_west:
-	/* West face: y = tile_y * 256 - 1. */
+	/* West: x = tile_x*256+t, y = tile_y*256-1. */
+	ld de, 0
+	ld d, (iy)
+	add hl, de
 	ld de, 0
 	ld d, (iy + 1)
 	dec de
 .Ltransform_exit_ready:
-	ld iy, (ix + 12)
-	ld (iy), hl
-	ld iy, (ix + 15)
-	ld (iy), de
+	ld (_render_ray_state + STATE_ORIGIN_X), hl
+	ld (_render_ray_state + STATE_ORIGIN_Y), de
 
-	ld a, (_render_transform_rotation)
-	pop ix
-	ret
+	/*
+	 * Rotate the direction with a specialized kernel. Rotation zero touches
+	 * neither component; quarter-turn kernels load the destination's old
+	 * component before overwriting it.
+	 */
+	ld a, (_render_transform_flags)
+	and a, 3
+	jr z, .Ltransform_state_axes
+	dec a
+	jr z, .Ltransform_ray_positive
+	dec a
+	jr z, .Ltransform_ray_half
 
-/* HL=x, DE=y, A=-1/0/1/2; returns the rotated pair. */
-.Lrotate_pair:
-	or a, a
-	ret z
-	cp a, 1
-	jr z, .Lrotate_positive
-	cp a, 2
-	jr z, .Lrotate_half
 	/* -90 degrees: (x, y) -> (y, -x). */
-	ex de, hl
-	push hl
-	ex de, hl
-	call .Lnegate_hl
-	push hl
-	pop de
-	pop hl
-	ret
-.Lrotate_positive:
-	/* +90 degrees: (x, y) -> (-y, x). */
-	ex de, hl
-	call .Lnegate_hl
-	ret
-.Lrotate_half:
-	/* 180 degrees: (x, y) -> (-x, -y). */
-	call .Lnegate_hl
-	push hl
-	ex de, hl
-	call .Lnegate_hl
-	push hl
-	pop de
-	pop hl
-	ret
-.Lnegate_hl:
-	push de
-	push hl
-	pop de
+	ld de, (_render_ray_state + STATE_RAY_X)
 	or a, a
 	sbc hl, hl
 	sbc hl, de
-	pop de
+	ld de, (_render_ray_state + STATE_RAY_Y)
+	ld (_render_ray_state + STATE_RAY_Y), hl
+	ld (_render_ray_state + STATE_RAY_X), de
+	jr .Ltransform_state_axes
+
+.Ltransform_ray_positive:
+	/* +90 degrees: (x, y) -> (-y, x). */
+	ld de, (_render_ray_state + STATE_RAY_Y)
+	or a, a
+	sbc hl, hl
+	sbc hl, de
+	ld de, (_render_ray_state + STATE_RAY_X)
+	ld (_render_ray_state + STATE_RAY_X), hl
+	ld (_render_ray_state + STATE_RAY_Y), de
+	jr .Ltransform_state_axes
+
+.Ltransform_ray_half:
+	/* 180 degrees: negate both components independently. */
+	ld de, (_render_ray_state + STATE_RAY_X)
+	or a, a
+	sbc hl, hl
+	sbc hl, de
+	ld (_render_ray_state + STATE_RAY_X), hl
+	ld de, (_render_ray_state + STATE_RAY_Y)
+	or a, a
+	sbc hl, hl
+	sbc hl, de
+	ld (_render_ray_state + STATE_RAY_Y), hl
+
+.Ltransform_state_axes:
+	/* Quarter turns swap every positive axis-specific persistent value. */
+	ld a, (_render_transform_flags)
+	and a, 1
+	jr z, .Ltransform_state_steps
+	ld hl, (_render_ray_state + STATE_DELTA_X)
+	ld de, (_render_ray_state + STATE_DELTA_Y)
+	ld (_render_ray_state + STATE_DELTA_X), de
+	ld (_render_ray_state + STATE_DELTA_Y), hl
+	ld a, (_render_ray_state + STATE_ABS_X)
+	ld b, a
+	ld a, (_render_ray_state + STATE_ABS_Y)
+	ld (_render_ray_state + STATE_ABS_X), a
+	ld a, b
+	ld (_render_ray_state + STATE_ABS_Y), a
+	ld a, (_render_ray_state + STATE_ABS_X + 1)
+	ld b, a
+	ld a, (_render_ray_state + STATE_ABS_Y + 1)
+	ld (_render_ray_state + STATE_ABS_X + 1), a
+	ld a, b
+	ld (_render_ray_state + STATE_ABS_Y + 1), a
+
+.Ltransform_state_steps:
+	/* Rebuild signed strides from the rotated rays; negative zero is zero. */
+	ld hl, 1
+	ld a, (_render_ray_state + STATE_RAY_X + 2)
+	bit 7, a
+	jr z, .Ltransform_step_x_ready
+	ld hl, -1
+.Ltransform_step_x_ready:
+	ld (_render_ray_state + STATE_MAP_STEP_X), hl
+	ld hl, 16
+	ld a, (_render_ray_state + STATE_RAY_Y + 2)
+	bit 7, a
+	jr z, .Ltransform_step_y_ready
+	ld hl, -16
+.Ltransform_step_y_ready:
+	ld (_render_ray_state + STATE_MAP_STEP_Y), hl
+
+	/* Translate packed code 3 back to the caller's signed -1 rotation. */
+	ld a, (_render_transform_flags)
+	and a, 3
+	cp a, 3
+	jr nz, .Ltransform_return
+	ld a, -1
+.Ltransform_return:
+	pop ix
 	ret
 
 	.size _render_asm_transform_ray, .-_render_asm_transform_ray
+	.size _render_asm_transform_ray_state, .-_render_asm_transform_ray_state
 
 	.section .text._render_asm_portal_opening,"ax",@progbits
 	.global _render_asm_portal_opening
@@ -1333,11 +2487,11 @@ _render_asm_portal_opening:
 	.size _render_asm_portal_opening, .-_render_asm_portal_opening
 
 	.section .rodata.render_portal_rotation,"a",@progbits
-.Lportal_rotation_table:
-	.byte 2, 0, -1, 1
-	.byte 0, 2, 1, -1
-	.byte 1, -1, 2, 0
-	.byte -1, 1, 0, 2
+.Lportal_transform_flags:
+	.byte 0x82, 0x00, 0x03, 0x81
+	.byte 0x00, 0x82, 0x81, 0x03
+	.byte 0x01, 0x83, 0x82, 0x00
+	.byte 0x83, 0x01, 0x00, 0x82
 
 	.section .text._render_asm_draw_wall_segment,"ax",@progbits
 	.global _render_asm_draw_wall_segment
@@ -1398,7 +2552,6 @@ _render_asm_draw_wall_segment:
 	ld hl, 0
 	ld l, c
 	ld h, a
-	add hl, hl
 	ld de, _render_wall_texture_runs
 	add hl, de
 	ld (_render_span_texture), hl
@@ -1407,13 +2560,13 @@ _render_asm_draw_wall_segment:
 	ld iy, (ix + 18)
 	ld hl, (iy + 4)
 	ld (_render_span_boundaries), hl
-	/* Heights >=16 have strictly increasing boundaries until the visible
+	/* Heights >=8 have strictly increasing boundaries until the visible
 	 * end, so descriptor.next_index is already the next visible source row. */
 	ld a, (iy + 1)
 	or a, a
 	jr nz, .Lspan_mark_strict_boundaries
 	ld a, (iy)
-	cp a, 16
+	cp a, 8
 	jr c, .Lspan_boundaries_ready
 .Lspan_mark_strict_boundaries:
 	ld a, (_render_span_material)
@@ -1476,7 +2629,7 @@ _render_asm_draw_wall_segment:
 	jr z, .Lspan_initial_ready
 .Lspan_initial_seek:
 	ld a, b
-	cp a, 15
+	cp a, 7
 	jr nc, .Lspan_initial_ready
 	inc hl
 	ld a, c
@@ -1534,32 +2687,93 @@ _render_asm_draw_wall_segment:
 	add hl, de
 	ld hl, (hl)
 	ld de, 320
-	/* Write an odd leading row, then retire two rows per loop branch. */
+	/*
+	 * Duff-style eight-row writer.  Every row still performs the exact same
+	 * packed24 + fourth-byte writes, but long texture runs now take one loop
+	 * branch per eight rows instead of one per two.  Runs shorter than eight
+	 * retain the lower-setup pair writer.  L is the palette byte in all three
+	 * packed lanes, so it can supply the fourth pixel directly.
+	 */
 	ld a, (_render_span_run_length)
+	cp a, 8
+	jr c, .Lspan_write_short
+	ld c, a
+	add a, 7
+	srl a
+	srl a
 	srl a
 	ld b, a
-	jr z, .Lspan_write_single
-	jr nc, .Lspan_write_pairs_ready
-	ld a, l
-	ld (iy), hl
-	ld (iy + 3), a
-	add iy, de
+	ld a, c
+	and a, 7
+	jr z, .Lspan_write_8
+	cp a, 4
+	jr c, .Lspan_write_low
+	jr z, .Lspan_write_4
+	cp a, 6
+	jr c, .Lspan_write_5
+	jr z, .Lspan_write_6
+	jr .Lspan_write_7
+.Lspan_write_low:
+	cp a, 2
+	jr c, .Lspan_write_1
+	jr z, .Lspan_write_2
+	jr .Lspan_write_3
 
-.Lspan_write_pairs_ready:
-	ld a, l
-.Lspan_write_pair:
+.Lspan_write_8:
 	ld (iy), hl
-	ld (iy + 3), a
+	ld (iy + 3), l
 	add iy, de
+.Lspan_write_7:
 	ld (iy), hl
-	ld (iy + 3), a
+	ld (iy + 3), l
 	add iy, de
-	djnz .Lspan_write_pair
+.Lspan_write_6:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lspan_write_5:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lspan_write_4:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lspan_write_3:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lspan_write_2:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lspan_write_1:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	djnz .Lspan_write_8
 	jr .Lspan_write_done
-.Lspan_write_single:
-	ld a, l
+
+.Lspan_write_short:
+	srl a
+	ld b, a
+	jr z, .Lspan_write_short_single
+	jr nc, .Lspan_write_short_pairs
 	ld (iy), hl
-	ld (iy + 3), a
+	ld (iy + 3), l
+	add iy, de
+.Lspan_write_short_pairs:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	djnz .Lspan_write_short_pairs
+	jr .Lspan_write_done
+.Lspan_write_short_single:
+	ld (iy), hl
+	ld (iy + 3), l
 	add iy, de
 .Lspan_write_done:
 	/* Advance past any collapsed source rows before drawing the next run. */
@@ -1581,7 +2795,7 @@ _render_asm_draw_wall_segment:
 	add hl, de
 .Lspan_advance_texture:
 	ld a, b
-	cp a, 15
+	cp a, 7
 	jr nc, .Lspan_advance_done
 	inc hl
 	ld a, c
@@ -1715,7 +2929,6 @@ _render_asm_draw_portal_mask:
 	ld hl, 0
 	ld l, c
 	ld h, a
-	add hl, hl
 	ld de, _render_wall_texture_runs
 	add hl, de
 	ld (_render_span_texture), hl
@@ -1727,7 +2940,7 @@ _render_asm_draw_portal_mask:
 	or a, a
 	jr nz, .Lportal_mask_mark_strict_boundaries
 	ld a, (iy)
-	cp a, 16
+	cp a, 8
 	jr c, .Lportal_mask_boundaries_ready
 .Lportal_mask_mark_strict_boundaries:
 	ld a, (_render_span_material)
@@ -1908,7 +3121,7 @@ _render_asm_draw_portal_mask:
 	jr z, .Lportal_mask_initial_ready
 .Lportal_mask_initial_seek:
 	ld a, b
-	cp a, 15
+	cp a, 7
 	jr nc, .Lportal_mask_initial_ready
 	inc hl
 	ld a, c
@@ -1965,30 +3178,85 @@ _render_asm_draw_portal_mask:
 	ld hl, (hl)
 	ld de, 320
 	ld a, (_render_span_run_length)
+	cp a, 8
+	jr c, .Lportal_mask_write_short
+	ld c, a
+	add a, 7
+	srl a
+	srl a
 	srl a
 	ld b, a
-	jr z, .Lportal_mask_write_single
-	jr nc, .Lportal_mask_write_pairs_ready
-	ld a, l
-	ld (iy), hl
-	ld (iy + 3), a
-	add iy, de
+	ld a, c
+	and a, 7
+	jr z, .Lportal_mask_write_8
+	cp a, 4
+	jr c, .Lportal_mask_write_low
+	jr z, .Lportal_mask_write_4
+	cp a, 6
+	jr c, .Lportal_mask_write_5
+	jr z, .Lportal_mask_write_6
+	jr .Lportal_mask_write_7
+.Lportal_mask_write_low:
+	cp a, 2
+	jr c, .Lportal_mask_write_1
+	jr z, .Lportal_mask_write_2
+	jr .Lportal_mask_write_3
 
-.Lportal_mask_write_pairs_ready:
-	ld a, l
-.Lportal_mask_write_pair:
+.Lportal_mask_write_8:
 	ld (iy), hl
-	ld (iy + 3), a
+	ld (iy + 3), l
 	add iy, de
+.Lportal_mask_write_7:
 	ld (iy), hl
-	ld (iy + 3), a
+	ld (iy + 3), l
 	add iy, de
-	djnz .Lportal_mask_write_pair
+.Lportal_mask_write_6:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lportal_mask_write_5:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lportal_mask_write_4:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lportal_mask_write_3:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lportal_mask_write_2:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lportal_mask_write_1:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	djnz .Lportal_mask_write_8
 	jr .Lportal_mask_write_done
-.Lportal_mask_write_single:
-	ld a, l
+
+.Lportal_mask_write_short:
+	srl a
+	ld b, a
+	jr z, .Lportal_mask_write_short_single
+	jr nc, .Lportal_mask_write_short_pairs
 	ld (iy), hl
-	ld (iy + 3), a
+	ld (iy + 3), l
+	add iy, de
+.Lportal_mask_write_short_pairs:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	djnz .Lportal_mask_write_short_pairs
+	jr .Lportal_mask_write_done
+.Lportal_mask_write_short_single:
+	ld (iy), hl
+	ld (iy + 3), l
 	add iy, de
 .Lportal_mask_write_done:
 	ld a, (_render_span_next_y)
@@ -2009,7 +3277,7 @@ _render_asm_draw_portal_mask:
 	add hl, de
 .Lportal_mask_advance_texture:
 	ld a, b
-	cp a, 15
+	cp a, 7
 	jr nc, .Lportal_mask_advance_done
 	inc hl
 	ld a, c
@@ -2075,24 +3343,11 @@ _render_asm_draw_portal_mask:
 	.size _render_asm_draw_portal_mask, .-_render_asm_draw_portal_mask
 
 	.section .bss.render_asm_scratch,"aw",@nobits
-	.local _render_asm_qx
-_render_asm_qx:
-	.zero 3
-	.local _render_asm_qy
-_render_asm_qy:
-	.zero 3
-	.local _render_asm_abs_x_shift
-_render_asm_abs_x_shift:
-	.zero 1
-	.local _render_asm_abs_x
-_render_asm_abs_x:
-	.zero 3
-	.local _render_asm_abs_y_shift
-_render_asm_abs_y_shift:
-	.zero 1
-	.local _render_asm_abs_y
-_render_asm_abs_y:
-	.zero 3
+	.global _render_ray_state
+	.type _render_ray_state, @object
+_render_ray_state:
+	.zero STATE_SIZE
+	.size _render_ray_state, STATE_SIZE
 	.local _render_asm_axis_boundary
 _render_asm_axis_boundary:
 	.zero 1
@@ -2108,6 +3363,54 @@ _render_grid_near_x:
 	.local _render_grid_far_x
 _render_grid_far_x:
 	.zero 3
+	.local _render_grid_floor_row
+_render_grid_floor_row:
+	.zero 3
+	.local _render_grid_ceiling_row
+_render_grid_ceiling_row:
+	.zero 3
+	.local _render_grid_floor_y0
+_render_grid_floor_y0:
+	.zero 1
+	.local _render_grid_floor_y1
+_render_grid_floor_y1:
+	.zero 1
+	.local _render_grid_ceiling_y0
+_render_grid_ceiling_y0:
+	.zero 1
+	.local _render_grid_ceiling_y1
+_render_grid_ceiling_y1:
+	.zero 1
+	.local _render_grid_clip_bound
+_render_grid_clip_bound:
+	.zero 3
+	.local _render_grid_clip_n
+_render_grid_clip_n:
+	.zero 3
+	.local _render_grid_clip_d
+_render_grid_clip_d:
+	.zero 3
+	.local _render_grid_clip_floor_delta
+_render_grid_clip_floor_delta:
+	.zero 1
+	.local _render_grid_clip_ceiling_delta
+_render_grid_clip_ceiling_delta:
+	.zero 1
+	.local _render_grid_clip_quotient
+_render_grid_clip_quotient:
+	.zero 1
+	.local _render_grid_clip_remainder
+_render_grid_clip_remainder:
+	.zero 3
+	.local _render_grid_clip_ceiling_magnitude
+_render_grid_clip_ceiling_magnitude:
+	.zero 1
+	.local _render_grid_clip_floor_result
+_render_grid_clip_floor_result:
+	.zero 1
+	.local _render_grid_clip_ceiling_result
+_render_grid_clip_ceiling_result:
+	.zero 1
 	.local _render_span_texture
 _render_span_texture:
 	.zero 3
@@ -2141,15 +3444,12 @@ _render_span_material:
 	.local _render_span_texel
 _render_span_texel:
 	.zero 1
-	.local _render_transform_local_x
-_render_transform_local_x:
-	.zero 3
-	.local _render_transform_local_y
-_render_transform_local_y:
-	.zero 3
-	.local _render_transform_rotation
-_render_transform_rotation:
+	.local _render_transform_flags
+_render_transform_flags:
 	.zero 1
+	.local _render_transform_exit
+_render_transform_exit:
+	.zero 3
 	.local _render_opening_profile
 _render_opening_profile:
 	.zero 1

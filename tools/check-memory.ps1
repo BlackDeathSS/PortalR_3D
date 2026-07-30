@@ -1,7 +1,7 @@
 param(
     [string]$MapPath = "bin/PORTAL3D.map",
     [string]$ObjectPath = "obj",
-    [int]$MaximumBytes = 49152,
+    [int]$MaximumBytes = 98304,
     [int]$ReservedStackBytes = 4096
 )
 

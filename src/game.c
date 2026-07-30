@@ -47,13 +47,14 @@
 /* Four-pixel ray columns preserve the detailed 80-ray view. */
 #define LOGICAL_COLUMNS GAME_RENDER_LOGICAL_COLUMNS
 #define COLUMN_WIDTH GAME_RENDER_COLUMN_WIDTH
-#define WALL_TEXTURE_SIZE GAME_RENDER_TEXTURE_SIZE
-#define WALL_TEXTURE_MASK (WALL_TEXTURE_SIZE - 1)
+#define WALL_TEXTURE_WIDTH GAME_RENDER_TEXTURE_WIDTH
+#define WALL_TEXTURE_HEIGHT GAME_RENDER_TEXTURE_HEIGHT
+#define WALL_TEXTURE_MASK (WALL_TEXTURE_HEIGHT - 1)
 #define WALL_TEXTURE_COUNT 4
 #define WALL_TEXTURE_DESCRIPTOR_SIZE 2u
 #define WALL_TEXTURE_DESCRIPTOR_COUNT \
-    (WALL_TEXTURE_COUNT * WALL_TEXTURE_SIZE * WALL_TEXTURE_SIZE)
-#define WALL_TEXTURE_BOUNDARY_COUNT (WALL_TEXTURE_SIZE + 1)
+    (WALL_TEXTURE_COUNT * WALL_TEXTURE_WIDTH * WALL_TEXTURE_HEIGHT)
+#define WALL_TEXTURE_BOUNDARY_COUNT (WALL_TEXTURE_HEIGHT + 1)
 #define MAX_WALL_TEXTURE_PROFILES 256
 #define WALL_BASE_COLOR_COUNT 8
 #define WALL_SHADE_LEVELS 4
@@ -158,39 +159,61 @@ typedef struct {
     fixed_t wall_position;
 } RayHit;
 
-typedef struct {
-    fixed_t x;
-    fixed_t y;
-} RayDeltaPair;
+/*
+ * One exact-DDA state is reused by every segment of the current logical ray.
+ * The renderer is deliberately single-threaded and already uses fixed global
+ * assembly scratch, so this removes repeated C ABI traffic without adding a
+ * per-column array.
+ *
+ * The zero padding around each 16-bit magnitude is intentional.  Assembly can
+ * load abs_x/abs_y either unshifted at offsets 25/28 or shifted left by eight
+ * at offsets 24/27.
+ */
+typedef struct __attribute__((packed)) {
+    fixed_t origin_x;
+    fixed_t origin_y;
+    fixed_t ray_x;
+    fixed_t ray_y;
+    fixed_t delta_x;
+    fixed_t delta_y;
+    fixed_t qx;
+    fixed_t qy;
+    uint8_t abs_x_shift;
+    uint16_t abs_x;
+    uint8_t abs_y_shift;
+    uint16_t abs_y;
+    uint8_t abs_end;
+    uint24_t threshold;
+    int24_t map_step_x;
+    int24_t map_step_y;
+    RayHit *hit;
+    const GameState *game;
+    uint8_t primary_tile;
+    uint8_t secondary_tile;
+    Portal portal_exit;
+    uint8_t portal_kind;
+    uint8_t portal_id;
+    uint8_t portal_has_exit;
+} RayDDAState;
 
 #if RENDER_ASM_RAYCAST
-extern void render_asm_cast_wall(
+extern RayDDAState render_ray_state;
+extern void render_asm_cast_wall_begin(
     fixed_t origin_x,
     fixed_t origin_y,
     fixed_t ray_x,
     fixed_t ray_y,
-    int24_t map_x,
-    int24_t map_y,
-    RayHit *hit,
-    fixed_t delta_x,
-    fixed_t delta_y
+    RayHit *hit
 );
-extern void render_asm_delta_pair(
-    fixed_t ray_x,
-    fixed_t ray_y,
-    RayDeltaPair *delta
-);
+extern void render_asm_cast_wall_continue(RayHit *hit);
 #endif
 
 #if RENDER_ASM_TRANSFORM
 extern int8_t render_asm_transform_ray(
     const RayHit *entry,
-    const Portal *exit,
-    fixed_t *origin_x,
-    fixed_t *origin_y,
-    fixed_t *ray_x,
-    fixed_t *ray_y
+    const Portal *exit
 );
+extern int8_t render_asm_transform_ray_state(void);
 #endif
 
 
@@ -259,6 +282,17 @@ typedef struct {
     uint8_t fraction;
 } FixedScale;
 
+#if RENDER_ASM_BACKGROUND
+/*
+ * Only clipped slanted lines reach the deferred ceiling pass. Projection is
+ * clamped to +/-4096, so signed 16-bit endpoints preserve every value while
+ * halving this 32-entry scratch array.
+ */
+typedef struct {
+    int16_t far_x;
+    int16_t near_x;
+} GridSegment;
+#else
 typedef struct {
     int24_t far_x;
     int24_t near_x;
@@ -271,6 +305,7 @@ enum GridSegmentKind {
     GRID_HORIZONTAL = 1,
     GRID_SLANTED_CLIPPED = 2
 };
+#endif
 
 typedef struct {
     fixed_t positive_limit;
@@ -500,6 +535,14 @@ static uint16_t render_wall_scale_offset[WALL_HEIGHT_TABLE_SIZE];
 static WallContext render_wall_scale_profiles[MAX_WALL_TEXTURE_PROFILES];
 ScreenRow render_screen_rows[GFX_LCD_HEIGHT];
 #define SCREEN_ROW_STORAGE_BYTES sizeof(render_screen_rows)
+/*
+ * A single full-turn sine table also supplies cosine through a quarter-turn
+ * index offset.  It is generated once at startup with the exact signed
+ * truncation of direction_for_angle(), replacing four generic 24-bit
+ * multiply/shift helper calls on every moving frame.
+ */
+static int16_t render_direction_y_by_angle[ANGLE_WRAP];
+static int16_t render_fov_by_direction[FIXED_ONE * 2u + 1u];
 uint8_t render_wall_texture_boundaries
     [MAX_WALL_TEXTURE_PROFILES][WALL_TEXTURE_BOUNDARY_COUNT];
 /*
@@ -516,12 +559,21 @@ uint8_t render_portal_profile_by_u[256];
 
 _Static_assert(LOGICAL_COLUMNS * COLUMN_WIDTH == GFX_LCD_WIDTH,
     "Ray columns must cover the complete LCD width");
+_Static_assert(LOGICAL_COLUMNS == 80u && FIELD_OF_VIEW < 240u,
+    "Division-free ray stepper quotient ranges changed");
 _Static_assert(COLUMN_WIDTH == 4,
     "draw_wall_run must match the configured ray-column width");
+_Static_assert(WALL_TEXTURE_WIDTH == 16u && WALL_TEXTURE_HEIGHT == 8u,
+    "Assembly texture addressing requires the 16-by-8 layout");
 _Static_assert(FLOOR_NEAR_HEIGHT == 236u && FLOOR_NEAR_SCREEN_Y == 238u,
     "Assembly near-grid projection constants changed");
 _Static_assert(FLOOR_FAR_HEIGHT == 15u && FLOOR_FAR_SCREEN_Y == 127u,
     "Assembly far-grid projection constants changed");
+_Static_assert(
+    COLOR_SKY_HORIZON == 2u && COLOR_FLOOR == 3u && COLOR_CEILING == 16u,
+    "Assembly split-background palette constants changed");
+_Static_assert(GFX_LCD_WIDTH == 320u && GFX_LCD_HEIGHT == 240u,
+    "Assembly split-background dimensions changed");
 _Static_assert(WALL_TEXTURE_COUNT == 4,
     "wall_material_for_ray uses a two-bit material index");
 _Static_assert(
@@ -529,9 +581,17 @@ _Static_assert(
     "Wall material palettes exceed indexed-color VRAM"
 );
 _Static_assert(sizeof(RenderScratch) <= 256u, "Render scratch exceeded its RAM budget");
-_Static_assert(sizeof(GridSegment) == 8u, "GridSegment must retain pointer-step indexing");
+#if RENDER_ASM_BACKGROUND
+_Static_assert(sizeof(GridSegment) == 4u,
+    "Assembly clipped-grid segment layout changed");
+_Static_assert(offsetof(GridSegment, near_x) == 2u,
+    "Assembly clipped-grid near-X offset changed");
+#else
+_Static_assert(sizeof(GridSegment) == 8u,
+    "GridSegment must retain pointer-step indexing");
 _Static_assert(offsetof(GridSegment, kind) == 7u,
-    "Assembly GridSegment.kind offset changed");
+    "GridSegment.kind offset changed");
+#endif
 _Static_assert(offsetof(GridProjection, height) == 6u,
     "Assembly GridProjection.height offset changed");
 _Static_assert(offsetof(GridProjection, screen_y) == 8u,
@@ -546,9 +606,54 @@ _Static_assert(offsetof(WallContext, boundaries) == 4u,
 _Static_assert(offsetof(WallContext, center) == 7u,
     "Assembly WallContext.center offset changed");
 _Static_assert(sizeof(RayHit) == 14u, "Assembly RayHit layout changed");
-_Static_assert(sizeof(RayDeltaPair) == 6u, "Assembly RayDeltaPair layout changed");
-_Static_assert(offsetof(RayDeltaPair, y) == 3u,
-    "Assembly RayDeltaPair.y offset changed");
+_Static_assert(sizeof(RayDDAState) == 55u,
+    "Assembly RayDDAState layout changed");
+_Static_assert(offsetof(RayDDAState, origin_y) == 3u,
+    "Assembly RayDDAState.origin_y offset changed");
+_Static_assert(offsetof(RayDDAState, ray_x) == 6u,
+    "Assembly RayDDAState.ray_x offset changed");
+_Static_assert(offsetof(RayDDAState, ray_y) == 9u,
+    "Assembly RayDDAState.ray_y offset changed");
+_Static_assert(offsetof(RayDDAState, delta_x) == 12u,
+    "Assembly RayDDAState.delta_x offset changed");
+_Static_assert(offsetof(RayDDAState, delta_y) == 15u,
+    "Assembly RayDDAState.delta_y offset changed");
+_Static_assert(offsetof(RayDDAState, qx) == 18u,
+    "Assembly RayDDAState.qx offset changed");
+_Static_assert(offsetof(RayDDAState, qy) == 21u,
+    "Assembly RayDDAState.qy offset changed");
+_Static_assert(offsetof(RayDDAState, abs_x_shift) == 24u,
+    "Assembly RayDDAState.abs_x_shift offset changed");
+_Static_assert(offsetof(RayDDAState, abs_x) == 25u,
+    "Assembly RayDDAState.abs_x offset changed");
+_Static_assert(offsetof(RayDDAState, abs_y_shift) == 27u,
+    "Assembly RayDDAState.abs_y_shift offset changed");
+_Static_assert(offsetof(RayDDAState, abs_y) == 28u,
+    "Assembly RayDDAState.abs_y offset changed");
+_Static_assert(offsetof(RayDDAState, abs_end) == 30u,
+    "Assembly RayDDAState.abs_end offset changed");
+_Static_assert(offsetof(RayDDAState, threshold) == 31u,
+    "Assembly RayDDAState.threshold offset changed");
+_Static_assert(offsetof(RayDDAState, map_step_x) == 34u,
+    "Assembly RayDDAState.map_step_x offset changed");
+_Static_assert(offsetof(RayDDAState, map_step_y) == 37u,
+    "Assembly RayDDAState.map_step_y offset changed");
+_Static_assert(offsetof(RayDDAState, hit) == 40u,
+    "Assembly RayDDAState.hit offset changed");
+_Static_assert(offsetof(RayDDAState, game) == 43u,
+    "Assembly RayDDAState.game offset changed");
+_Static_assert(offsetof(RayDDAState, primary_tile) == 46u,
+    "Assembly RayDDAState.primary_tile offset changed");
+_Static_assert(offsetof(RayDDAState, secondary_tile) == 47u,
+    "Assembly RayDDAState.secondary_tile offset changed");
+_Static_assert(offsetof(RayDDAState, portal_exit) == 48u,
+    "Assembly RayDDAState.portal_exit offset changed");
+_Static_assert(offsetof(RayDDAState, portal_kind) == 52u,
+    "Assembly RayDDAState.portal_kind offset changed");
+_Static_assert(offsetof(RayDDAState, portal_id) == 53u,
+    "Assembly RayDDAState.portal_id offset changed");
+_Static_assert(offsetof(RayDDAState, portal_has_exit) == 54u,
+    "Assembly RayDDAState.portal_has_exit offset changed");
 _Static_assert(sizeof(Portal) == 4u, "Assembly Portal layout changed");
 _Static_assert(offsetof(GameState, primary) == 8u,
     "Assembly GameState.primary offset changed");
@@ -572,13 +677,15 @@ _Static_assert(
     sizeof(GameState) + sizeof(RenderScratch) + sizeof(render_wall_scale_offset) +
         sizeof(render_wall_scale_profiles) +
         sizeof(grid_segments) + SCREEN_ROW_STORAGE_BYTES +
+        sizeof(render_direction_y_by_angle) +
+        sizeof(render_fov_by_direction) +
         sizeof(render_wall_texture_boundaries) +
         sizeof(render_wall_texture_runs) +
         sizeof(render_wall_colors) +
         sizeof(render_portal_profile_by_u) + sizeof(render_grid_near_projection) +
         sizeof(grid_far_projection) +
-        4096u < 48u * 1024u,
-    "Static state plus the reserved CEdev stack exceeds 48 KiB"
+        4096u < 96u * 1024u,
+    "Static state plus the reserved CEdev stack exceeds 96 KiB"
 );
 
 /* A padded 16-by-16 map makes every DDA lookup a shift and an indexed load. */
@@ -660,17 +767,6 @@ const PortalLink render_builtin_portals[10] = {
     {3, 0, DIR_EAST, 0, 2, DIR_SOUTH}
 };
 
-static const int16_t direction_x[ANGLE_STEPS] = {
-    256, 255, 251, 245, 237, 226, 213, 198,
-    181, 162, 142, 121, 98, 74, 50, 25,
-    0, -25, -50, -74, -98, -121, -142, -162,
-    -181, -198, -213, -226, -237, -245, -251, -255,
-    -256, -255, -251, -245, -237, -226, -213, -198,
-    -181, -162, -142, -121, -98, -74, -50, -25,
-    0, 25, 50, 74, 98, 121, 142, 162,
-    181, 198, 213, 226, 237, 245, 251, 255
-};
-
 static const int16_t direction_y[ANGLE_STEPS] = {
     0, 25, 50, 74, 98, 121, 142, 162,
     181, 198, 213, 226, 237, 245, 251, 255,
@@ -740,25 +836,53 @@ static fixed_t scale_delta(uint16_t fraction, fixed_t delta) {
 #endif
 
 static void ray_stepper_init(RayStepper *stepper, fixed_t direction, fixed_t plane) {
-    int24_t numerator = (direction - plane) * LOGICAL_COLUMNS + plane;
-    int24_t delta = plane * 2;
-    int24_t value = numerator / LOGICAL_COLUMNS;
-    int24_t error = numerator - value * LOGICAL_COLUMNS;
-    int24_t step = delta / LOGICAL_COLUMNS;
-    int24_t error_step = delta - step * LOGICAL_COLUMNS;
+    int8_t quotient;
+    uint8_t remainder;
 
-    if (error < 0) {
-        --value;
-        error += LOGICAL_COLUMNS;
+    /*
+     * For 80 columns:
+     *   floor(((direction-plane)*80 + plane) / 80)
+     *       = direction - plane + floor(plane / 80).
+     *
+     * Resolve plane = 80*quotient + remainder directly. The camera plane is
+     * bounded to [-169,169], so three positive and three negative ranges cover
+     * every reachable value without signed division or multiplication by 80.
+     */
+    if (plane >= 0) {
+        if (plane >= 160) {
+            quotient = 2;
+            remainder = (uint8_t)(plane - 160);
+        } else if (plane >= 80) {
+            quotient = 1;
+            remainder = (uint8_t)(plane - 80);
+        } else {
+            quotient = 0;
+            remainder = (uint8_t)plane;
+        }
+    } else if (plane < -160) {
+        quotient = -3;
+        remainder = (uint8_t)(plane + 240);
+    } else if (plane < -80) {
+        quotient = -2;
+        remainder = (uint8_t)(plane + 160);
+    } else {
+        quotient = -1;
+        remainder = (uint8_t)(plane + 80);
     }
-    if (error_step < 0) {
-        --step;
-        error_step += LOGICAL_COLUMNS;
+
+    stepper->value = direction - plane + quotient;
+    stepper->error = remainder;
+
+    /*
+     * floor(2*plane/80) = 2*quotient + floor(2*remainder/80).
+     * Keep error_step in the same canonical 0..79 range as the old path.
+     */
+    stepper->step = (fixed_t)(quotient + quotient);
+    if (remainder >= 40) {
+        ++stepper->step;
+        remainder -= 40;
     }
-    stepper->value = value;
-    stepper->step = step;
-    stepper->error = (uint8_t)error;
-    stepper->error_step = (uint8_t)error_step;
+    stepper->error_step = (uint8_t)(remainder + remainder);
 }
 
 static inline __attribute__((always_inline)) void ray_stepper_advance(RayStepper *stepper) {
@@ -781,19 +905,6 @@ static fixed_t delta_for_component(fixed_t component) {
     }
     if (magnitude > 425) magnitude = 425;
     return render_reciprocal_delta[magnitude];
-}
-
-static inline __attribute__((always_inline)) void delta_pair_for_ray(
-    fixed_t ray_x,
-    fixed_t ray_y,
-    RayDeltaPair *delta
-) {
-#if RENDER_ASM_RAYCAST
-    render_asm_delta_pair(ray_x, ray_y, delta);
-#else
-    delta->x = delta_for_component(ray_x);
-    delta->y = delta_for_component(ray_y);
-#endif
 }
 
 static inline __attribute__((always_inline)) uint8_t map_is_wall(int24_t x, int24_t y) {
@@ -879,6 +990,7 @@ static uint8_t portal_find_exit(
 }
 #endif
 
+#if !RENDER_ASM_RAYCAST
 static inline __attribute__((always_inline)) uint8_t render_portal_find_exit(
     const GameState *game,
     uint8_t x,
@@ -900,6 +1012,25 @@ static inline __attribute__((always_inline)) uint8_t render_portal_find_exit(
         game, x, y, direction, exit, kind, portal_id
     );
 }
+#endif
+
+#if RENDER_ASM_RAYCAST
+/*
+ * Portal identity is constant throughout one render (or placement trace).
+ * Cache the two dynamic tile keys beside the persistent DDA state so the
+ * assembly hit tail can reject ordinary walls and resolve linked exits
+ * without returning through a second C ABI call.
+ */
+static inline __attribute__((always_inline)) void render_ray_set_game(
+    const GameState *game
+) {
+    render_ray_state.game = game;
+    render_ray_state.primary_tile = game->primary.valid ?
+        (uint8_t)(map_row_offsets[game->primary.y] + game->primary.x) : 0xFFu;
+    render_ray_state.secondary_tile = game->secondary.valid ?
+        (uint8_t)(map_row_offsets[game->secondary.y] + game->secondary.x) : 0xFFu;
+}
+#endif
 
 static int8_t portal_rotation(uint8_t entry_direction, uint8_t exit_direction) {
     if (entry_direction == exit_direction) {
@@ -941,30 +1072,6 @@ static void rotate_quarter(fixed_t *x, fixed_t *y, int8_t quarters) {
 }
 
 #if RENDER_ASM_RAYCAST
-static inline __attribute__((always_inline)) void cast_wall_with_delta(
-    fixed_t origin_x,
-    fixed_t origin_y,
-    fixed_t ray_x,
-    fixed_t ray_y,
-    int24_t map_x,
-    int24_t map_y,
-    RayHit *hit,
-    fixed_t delta_x,
-    fixed_t delta_y
-) {
-    render_asm_cast_wall(
-        origin_x,
-        origin_y,
-        ray_x,
-        ray_y,
-        map_x,
-        map_y,
-        hit,
-        delta_x,
-        delta_y
-    );
-}
-
 static inline __attribute__((always_inline)) void cast_wall(
     fixed_t origin_x,
     fixed_t origin_y,
@@ -974,17 +1081,9 @@ static inline __attribute__((always_inline)) void cast_wall(
     int24_t map_y,
     RayHit *hit
 ) {
-    cast_wall_with_delta(
-        origin_x,
-        origin_y,
-        ray_x,
-        ray_y,
-        map_x,
-        map_y,
-        hit,
-        delta_for_component(ray_x),
-        delta_for_component(ray_y)
-    );
+    (void)map_x;
+    (void)map_y;
+    render_asm_cast_wall_begin(origin_x, origin_y, ray_x, ray_y, hit);
 }
 #else
 static void cast_wall(
@@ -1084,7 +1183,6 @@ static void cast_wall(
     hit->portal_kind = PORTAL_NONE;
 }
 
-
 static inline __attribute__((always_inline)) void cast_wall_with_delta(
     fixed_t origin_x,
     fixed_t origin_y,
@@ -1100,20 +1198,21 @@ static inline __attribute__((always_inline)) void cast_wall_with_delta(
     (void)delta_y;
     cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y, hit);
 }
+
 #endif
 
 #if RENDER_ASM_TRANSFORM
 static inline __attribute__((always_inline)) int8_t transform_ray(
     const RayHit *entry,
-    const Portal *exit,
-    fixed_t *origin_x,
-    fixed_t *origin_y,
-    fixed_t *ray_x,
-    fixed_t *ray_y
+    const Portal *exit
 ) {
-    return render_asm_transform_ray(
-        entry, exit, origin_x, origin_y, ray_x, ray_y
-    );
+#if RENDER_ASM_RAYCAST
+    (void)entry;
+    (void)exit;
+    return render_asm_transform_ray_state();
+#else
+    return render_asm_transform_ray(entry, exit);
+#endif
 }
 #else
 static int8_t transform_ray(
@@ -1229,14 +1328,12 @@ static void transform_player(GameState *game, const Portal *exit, uint8_t entry_
 }
 
 static void direction_for_angle(uint16_t angle, fixed_t *x, fixed_t *y) {
-    uint8_t index = (uint8_t)((angle >> ANGLE_FRACTION_BITS) & (ANGLE_STEPS - 1));
-    uint8_t next = (uint8_t)((index + 1) & (ANGLE_STEPS - 1));
-    uint8_t fraction = (uint8_t)angle;
+    uint16_t normalized = (uint16_t)(angle & ANGLE_MASK);
 
-    *x = direction_x[index] +
-        (fixed_t)(((int24_t)(direction_x[next] - direction_x[index]) * fraction) / 256);
-    *y = direction_y[index] +
-        (fixed_t)(((int24_t)(direction_y[next] - direction_y[index]) * fraction) / 256);
+    *y = render_direction_y_by_angle[normalized];
+    *x = render_direction_y_by_angle[
+        (uint16_t)((normalized + ANGLE_WRAP / 4u) & ANGLE_MASK)
+    ];
 }
 
 static void move_without_portal(GameState *game, fixed_t amount) {
@@ -1352,21 +1449,35 @@ static void place_portal(GameState *game, uint8_t primary) {
     fixed_t origin_y = game->player_y;
     fixed_t ray_x;
     fixed_t ray_y;
-    int24_t map_x = origin_x / FIXED_ONE;
-    int24_t map_y = origin_y / FIXED_ONE;
+    int24_t map_x = fixed_cell(&origin_x);
+    int24_t map_y = fixed_cell(&origin_y);
     uint8_t depth;
 
     direction_for_angle(game->angle, &ray_x, &ray_y);
+#if RENDER_ASM_RAYCAST
+    render_ray_set_game(game);
+#endif
 
     for (depth = 0; depth < MAX_PORTAL_TRACE_DEPTH; ++depth) {
         RayHit hit;
+#if RENDER_ASM_RAYCAST
+        const Portal *exit;
+#else
         Portal exit;
+#endif
         uint8_t kind;
         uint8_t portal_id;
+        uint8_t has_exit;
 
         cast_wall(origin_x, origin_y, ray_x, ray_y, map_x, map_y, &hit);
 
-        if (portal_find_exit(
+#if RENDER_ASM_RAYCAST
+        exit = &render_ray_state.portal_exit;
+        kind = render_ray_state.portal_kind;
+        portal_id = render_ray_state.portal_id;
+        has_exit = render_ray_state.portal_has_exit;
+#else
+        has_exit = portal_find_exit(
             game,
             hit.map_x,
             hit.map_y,
@@ -1374,12 +1485,26 @@ static void place_portal(GameState *game, uint8_t primary) {
             &exit,
             &kind,
             &portal_id
-        )) {
+        );
+#endif
+        if (has_exit) {
             (void)kind;
             (void)portal_id;
+#if RENDER_ASM_TRANSFORM
+            (void)transform_ray(&hit, exit);
+            origin_x = render_ray_state.origin_x;
+            origin_y = render_ray_state.origin_y;
+            ray_x = render_ray_state.ray_x;
+            ray_y = render_ray_state.ray_y;
+#else
+#if RENDER_ASM_RAYCAST
+            transform_ray(&hit, exit, &origin_x, &origin_y, &ray_x, &ray_y);
+#else
             transform_ray(&hit, &exit, &origin_x, &origin_y, &ray_x, &ray_y);
-            map_x = origin_x / FIXED_ONE;
-            map_y = origin_y / FIXED_ONE;
+#endif
+#endif
+            map_x = fixed_cell(&origin_x);
+            map_y = fixed_cell(&origin_y);
             continue;
         }
 
@@ -1455,7 +1580,7 @@ static uint8_t wall_texture_column_offset(const RayHit *ray) {
         (ray->side != 0 && ray->step_y < 0)) {
         texture_offset = (uint8_t)(0xF0 - texture_offset);
     }
-    return texture_offset;
+    return (uint8_t)(texture_offset >> 1);
 }
 
 static inline __attribute__((always_inline)) uint8_t wall_material_for_ray(
@@ -1507,7 +1632,7 @@ static void draw_textured_wall_segment(
     texture_column_offset = wall_texture_column_offset(ray);
     material = wall_material_for_ray(ray);
     texture_column = &render_wall_texture_runs[
-        ((uint16_t)material * WALL_TEXTURE_SIZE * WALL_TEXTURE_SIZE +
+        ((uint16_t)material * WALL_TEXTURE_WIDTH * WALL_TEXTURE_HEIGHT +
             texture_column_offset) * WALL_TEXTURE_DESCRIPTOR_SIZE
     ];
     boundaries = full_context->boundaries;
@@ -1580,11 +1705,17 @@ static inline __attribute__((always_inline)) void draw_visible_floor_segment(
 #endif
 
 #if RENDER_ASM_BACKGROUND
-extern void render_asm_add_horizontal_grid_segment(
+extern void render_asm_clear_background(void);
+extern void render_asm_repair_horizon(void);
+extern void render_asm_draw_horizontal_grid_pair(uint8_t screen_y);
+
+static inline __attribute__((always_inline)) void add_horizontal_grid_segment(
     GridSegment **segment_end,
     uint8_t screen_y
-);
-#define add_horizontal_grid_segment render_asm_add_horizontal_grid_segment
+) {
+    (void)segment_end;
+    render_asm_draw_horizontal_grid_pair(screen_y);
+}
 
 extern void render_asm_add_projected_grid_segment(
     GridSegment **segment_end,
@@ -1779,16 +1910,20 @@ static void draw_background_grid(
         }
     }
 
+#if RENDER_ASM_BACKGROUND
     /*
-     * GraphX fills VRAM with its stack-push fast path. The ceiling overwrite
-     * plus the later horizon band restores the exact two-color background.
+     * game_render already waited for the draw buffer. Fill the ceiling,
+     * horizon, and floor once each with the interrupt-safe stack-push path.
      */
+    render_asm_clear_background();
+#else
     gfx_FillScreen(COLOR_FLOOR);
     memset(
         &gfx_vbuffer[0][0],
         COLOR_CEILING,
         GFX_LCD_WIDTH * 112u
     );
+#endif
     gfx_SetColor(COLOR_FLOOR_NEAR);
 
     /* Project each world-space line once; ceiling lines mirror the floor. */
@@ -1913,8 +2048,21 @@ static void draw_background_grid(
         uint8_t ceiling_near_y = (uint8_t)(GFX_LCD_HEIGHT - near_screen_y);
 
         for (segment = grid_segments; segment != segment_end; ++segment) {
+#if RENDER_ASM_BACKGROUND
+            uint8_t far_y =
+                (uint8_t)(GFX_LCD_HEIGHT - FLOOR_FAR_SCREEN_Y);
+#else
             uint8_t far_y = (uint8_t)(GFX_LCD_HEIGHT - segment->far_y);
+#endif
 
+#if RENDER_ASM_BACKGROUND
+            gfx_Line(
+                segment->far_x,
+                far_y,
+                segment->near_x,
+                ceiling_near_y
+            );
+#else
             if (segment->kind == GRID_HORIZONTAL) {
                 gfx_HorizLine_NoClip(0, far_y, GFX_LCD_WIDTH);
             } else if (segment->kind == GRID_SLANTED_NOCLIP) {
@@ -1932,6 +2080,7 @@ static void draw_background_grid(
                     ceiling_near_y
                 );
             }
+#endif
         }
     }
 }
@@ -2131,18 +2280,17 @@ static void render_column(
     const GameState *game,
     uint24_t x,
     fixed_t ray_x,
-    fixed_t ray_y,
-    uint8_t start_map_x,
-    uint8_t start_map_y
+    fixed_t ray_y
 ) {
+#if !RENDER_ASM_RAYCAST
     fixed_t origin_x = game->player_x;
     fixed_t origin_y = game->player_y;
-    int24_t map_x = start_map_x;
-    int24_t map_y = start_map_y;
+    int24_t map_x = fixed_cell(&origin_x);
+    int24_t map_y = fixed_cell(&origin_y);
+    fixed_t delta_x = delta_for_component(ray_x);
+    fixed_t delta_y = delta_for_component(ray_y);
+#endif
     fixed_t distance_bias = 0;
-    RayDeltaPair ray_delta;
-    fixed_t delta_x;
-    fixed_t delta_y;
     uint8_t visited_low = 0;
     uint8_t visited_high = 0;
     uint8_t count = 0;
@@ -2150,14 +2298,12 @@ static void render_column(
     uint8_t clip_end = GFX_LCD_HEIGHT;
     uint8_t terminal_open = 0;
 
-    RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_DDA);
-    delta_pair_for_ray(ray_x, ray_y, &ray_delta);
-    delta_x = ray_delta.x;
-    delta_y = ray_delta.y;
-    RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
-
     while (count < MAX_RENDER_PORTAL_DEPTH) {
+#if RENDER_ASM_RAYCAST
+        const Portal *exit;
+#else
         Portal exit;
+#endif
         uint8_t kind;
         uint8_t portal_id;
         uint8_t has_exit;
@@ -2174,6 +2320,15 @@ static void render_column(
         render_scratch.clip_start[count] = clip_start;
         render_scratch.clip_end[count] = clip_end;
         RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_DDA);
+#if RENDER_ASM_RAYCAST
+        if (count == 0) {
+            render_asm_cast_wall_begin(
+                game->player_x, game->player_y, ray_x, ray_y, hit
+            );
+        } else {
+            render_asm_cast_wall_continue(hit);
+        }
+#else
         cast_wall_with_delta(
             origin_x,
             origin_y,
@@ -2185,11 +2340,17 @@ static void render_column(
             delta_x,
             delta_y
         );
+#endif
         RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
 #if RENDER_BENCHMARK
         if (render_benchmark_active) {
+#if RENDER_ASM_RAYCAST
+            uint8_t input_x = fixed_cell(&render_ray_state.origin_x);
+            uint8_t input_y = fixed_cell(&render_ray_state.origin_y);
+#else
             uint8_t input_x = (uint8_t)map_x;
             uint8_t input_y = (uint8_t)map_y;
+#endif
             uint8_t x_steps = hit->map_x >= input_x ?
                 (uint8_t)(hit->map_x - input_x) :
                 (uint8_t)(input_x - hit->map_x);
@@ -2217,7 +2378,12 @@ static void render_column(
         projected_distance = distance_bias + segment_distance;
 #if RENDER_RAY_DIAGNOSTIC
         {
+#if RENDER_ASM_RAYCAST
+            fixed_t minor_component = hit->side == 0 ?
+                render_ray_state.ray_y : render_ray_state.ray_x;
+#else
             fixed_t minor_component = hit->side == 0 ? ray_y : ray_x;
+#endif
             uint16_t minor = (uint16_t)fixed_abs(minor_component);
 
             /* A max-height one-ray streak has projected distance below 96.
@@ -2233,8 +2399,14 @@ static void render_column(
                 render_profile.near_column = (uint8_t)(x / COLUMN_WIDTH);
                 render_profile.near_layer = count;
                 render_profile.near_side = hit->side;
+#if RENDER_ASM_RAYCAST
+                render_profile.near_origin_fraction = hit->side == 0 ?
+                    *(const uint8_t *)&render_ray_state.origin_y :
+                    *(const uint8_t *)&render_ray_state.origin_x;
+#else
                 render_profile.near_origin_fraction = hit->side == 0 ?
                     *(const uint8_t *)&origin_y : *(const uint8_t *)&origin_x;
+#endif
                 render_profile.near_hit_cell = (uint8_t)(
                     (hit->map_y << 4) | hit->map_x
                 );
@@ -2245,6 +2417,12 @@ static void render_column(
         }
 #endif
         hit->distance = projected_distance;
+#if RENDER_ASM_RAYCAST
+        exit = &render_ray_state.portal_exit;
+        kind = render_ray_state.portal_kind;
+        portal_id = render_ray_state.portal_id;
+        has_exit = render_ray_state.portal_has_exit;
+#else
         has_exit = render_portal_find_exit(
             game,
             hit->map_x,
@@ -2254,6 +2432,7 @@ static void render_column(
             &kind,
             &portal_id
         );
+#endif
 #if RENDER_BENCHMARK
         if (render_benchmark_active && has_exit) {
             ++render_benchmark.linked_exits;
@@ -2313,28 +2492,34 @@ static void render_column(
                 ++render_benchmark.portal_transforms;
             }
 #endif
+#if RENDER_ASM_TRANSFORM
+            (void)transform_ray(hit, exit);
+#else
+#if RENDER_ASM_RAYCAST
             int8_t rotation = transform_ray(
-                hit,
-                &exit,
-                &origin_x,
-                &origin_y,
-                &ray_x,
-                &ray_y
+                hit, exit, &origin_x, &origin_y, &ray_x, &ray_y
             );
-
+#else
+            int8_t rotation = transform_ray(
+                hit, &exit, &origin_x, &origin_y, &ray_x, &ray_y
+            );
+#endif
             if ((rotation & 1) != 0) {
                 fixed_t swap = delta_x;
 
                 delta_x = delta_y;
                 delta_y = swap;
             }
+#endif
         }
 #if !RENDER_ASM_TRANSFORM
         hit->distance = projected_distance;
 #endif
         distance_bias = projected_distance;
+#if !RENDER_ASM_RAYCAST
         map_x = fixed_cell(&origin_x);
         map_y = fixed_cell(&origin_y);
+#endif
     }
 
     RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
@@ -2442,6 +2627,7 @@ void game_init(GameState *game) {
 
 void game_graphics_init(void) {
     uint24_t index;
+    uint16_t fraction;
     uint16_t height = WALL_HEIGHT_MAX;
     uint16_t previous_height = 0;
     uint16_t profile_count = 0;
@@ -2450,7 +2636,7 @@ void game_graphics_init(void) {
     uint8_t material;
     uint8_t boundary;
     uint8_t shade;
-    uint8_t texture_column[WALL_TEXTURE_SIZE];
+    uint8_t texture_column[WALL_TEXTURE_HEIGHT];
     static const uint8_t shade_offsets[WALL_SHADE_LEVELS] = {0, 8, 16, 24};
     static const uint8_t wall_palette_rgb
         [WALL_TEXTURE_COUNT][WALL_BASE_COLOR_COUNT][3] = {
@@ -2472,6 +2658,48 @@ void game_graphics_init(void) {
         }
     };
 
+    /*
+     * Preserve C's truncation toward zero exactly.  Within each 1/64-turn
+     * segment, an error accumulator generates
+     *   start + trunc((next - start) * fraction / 256)
+     * without doing a multiply or divide during initialization either.
+     */
+    for (index = 0; index < ANGLE_STEPS; ++index) {
+        int16_t value = direction_y[index];
+        int16_t difference = (int16_t)(
+            direction_y[(index + 1u) & (ANGLE_STEPS - 1u)] - value
+        );
+        int8_t step = difference < 0 ? -1 : 1;
+        uint8_t amount = (uint8_t)(
+            difference < 0 ? -difference : difference
+        );
+        uint16_t error = 0;
+        uint24_t offset = index << ANGLE_FRACTION_BITS;
+
+        for (fraction = 0; fraction < (1u << ANGLE_FRACTION_BITS);
+            ++fraction) {
+            render_direction_y_by_angle[offset + fraction] = value;
+            error = (uint16_t)(error + amount);
+            if (error >= (1u << ANGLE_FRACTION_BITS)) {
+                error = (uint16_t)(error - (1u << ANGLE_FRACTION_BITS));
+                value = (int16_t)(value + step);
+            }
+        }
+    }
+
+    for (index = 0; index <= FIXED_ONE * 2u; ++index) {
+        int16_t component = (int16_t)index - FIXED_ONE;
+        uint16_t magnitude = (uint16_t)(
+            component < 0 ? -component : component
+        );
+        int16_t scaled = (int16_t)(
+            ((uint24_t)magnitude * FIELD_OF_VIEW) >> FIXED_SHIFT
+        );
+
+        render_fov_by_direction[index] =
+            component < 0 ? (int16_t)-scaled : scaled;
+    }
+
     render_screen_rows[0].offset = 0;
     for (index = 1; index < GFX_LCD_HEIGHT; ++index) {
         render_screen_rows[index].offset =
@@ -2489,7 +2717,7 @@ void game_graphics_init(void) {
         if (height != previous_height) {
             WallContext *context = &render_wall_scale_profiles[profile_count];
             uint16_t step =
-                (uint16_t)(((uint24_t)WALL_TEXTURE_SIZE << 8) / height);
+                (uint16_t)(((uint24_t)WALL_TEXTURE_HEIGHT << 8) / height);
             uint16_t visible_height = height < GFX_LCD_HEIGHT ?
                 height : GFX_LCD_HEIGHT;
 
@@ -2538,51 +2766,57 @@ void game_graphics_init(void) {
     }
 
     for (material = 0; material < WALL_TEXTURE_COUNT; ++material) {
-        for (x = 0; x < WALL_TEXTURE_SIZE; ++x) {
-            for (y = 0; y < WALL_TEXTURE_SIZE; ++y) {
+        for (x = 0; x < WALL_TEXTURE_WIDTH; ++x) {
+            for (y = 0; y < WALL_TEXTURE_HEIGHT; ++y) {
+                uint8_t source_y = (uint8_t)(y << 1);
                 uint8_t texel;
 
                 if (material == 0) {
-                    uint8_t mortar = (x == 0 || y == 0 || y == 8 ||
-                        ((y >= 8) ? x == 8 : 0));
+                    uint8_t mortar = (x == 0 || source_y == 0 ||
+                        source_y == 8 || ((source_y >= 8) ? x == 8 : 0));
                     uint8_t noise = (uint8_t)(
-                        (x * 5u + y * 3u + ((x ^ y) * 7u)) & 3u
+                        (x * 5u + source_y * 3u +
+                            ((x ^ source_y) * 7u)) & 3u
                     );
 
                     texel = mortar ? 0 : (uint8_t)(2u + noise);
                 } else if (material == 1) {
                     uint8_t seam = (uint8_t)(
-                        x == 0 || x == 8 || y == 0 || y == 8
+                        x == 0 || x == 8 || source_y == 0 || source_y == 8
                     );
                     uint8_t rivet = (uint8_t)(
                         ((x & 7u) == 2u || (x & 7u) == 6u) &&
-                        ((y & 7u) == 2u || (y & 7u) == 6u)
+                        ((source_y & 7u) == 2u ||
+                            (source_y & 7u) == 6u)
                     );
                     uint8_t brushed = (uint8_t)(
-                        2u + ((x * 3u + y * 5u + (x ^ y)) & 3u)
+                        2u + ((x * 3u + source_y * 5u +
+                            (x ^ source_y)) & 3u)
                     );
 
                     texel = seam ? 0 : (rivet ? 7 : brushed);
                 } else if (material == 2) {
                     uint8_t joint = (uint8_t)(
-                        y == 0 || y == 8 ||
-                        ((y < 8) ? x == 0 : x == 8)
+                        source_y == 0 || source_y == 8 ||
+                        ((source_y < 8) ? x == 0 : x == 8)
                     );
                     uint8_t aggregate = (uint8_t)(
-                        2u + ((x * 7u + y * 11u + (x ^ (y * 3u))) & 3u)
+                        2u + ((x * 7u + source_y * 11u +
+                            (x ^ (source_y * 3u))) & 3u)
                     );
                     uint8_t pock = (uint8_t)(
-                        ((x * 13u + y * 5u) & 31u) == 0u
+                        ((x * 13u + source_y * 5u) & 31u) == 0u
                     );
 
                     texel = joint ? 0 : (pock ? 1 : aggregate);
                 } else {
                     uint8_t seam = (uint8_t)(
-                        x == 0 || x == 8 || y == 0 || y == 8
+                        x == 0 || x == 8 || source_y == 0 || source_y == 8
                     );
-                    uint8_t hazard = (uint8_t)((x + y) & 7u);
+                    uint8_t hazard = (uint8_t)((x + source_y) & 7u);
                     uint8_t plate = (uint8_t)(
-                        2u + ((x * 5u + y * 3u + (x ^ y)) & 3u)
+                        2u + ((x * 5u + source_y * 3u +
+                            (x ^ source_y)) & 3u)
                     );
 
                     texel = seam ? 0 :
@@ -2591,15 +2825,16 @@ void game_graphics_init(void) {
                 texture_column[y] = texel;
             }
 
-            for (y = 0; y < WALL_TEXTURE_SIZE; ++y) {
+            for (y = 0; y < WALL_TEXTURE_HEIGHT; ++y) {
                 uint8_t next = (uint8_t)(y + 1);
                 uint16_t descriptor_index = (uint16_t)(
-                    ((uint16_t)material * WALL_TEXTURE_SIZE * WALL_TEXTURE_SIZE +
-                        (uint16_t)x * WALL_TEXTURE_SIZE + y) *
+                    ((uint16_t)material * WALL_TEXTURE_WIDTH *
+                        WALL_TEXTURE_HEIGHT +
+                        (uint16_t)x * WALL_TEXTURE_HEIGHT + y) *
                     WALL_TEXTURE_DESCRIPTOR_SIZE
                 );
 
-                while (next < WALL_TEXTURE_SIZE &&
+                while (next < WALL_TEXTURE_HEIGHT &&
                     texture_column[next] == texture_column[y]) {
                     ++next;
                 }
@@ -2739,8 +2974,6 @@ void game_render(const GameState *game) {
     fixed_t plane_y;
     RayStepper ray_x;
     RayStepper ray_y;
-    uint8_t player_map_x = fixed_cell(&game->player_x);
-    uint8_t player_map_y = fixed_cell(&game->player_y);
     uint24_t column;
 #if RENDER_PROFILE
     clock_t mark;
@@ -2772,14 +3005,23 @@ void game_render(const GameState *game) {
     mark = now;
 #endif
     direction_for_angle(game->angle, &dir_x, &dir_y);
-    plane_x = -fixed_mul_camera(dir_y, FIELD_OF_VIEW);
-    plane_y = fixed_mul_camera(dir_x, FIELD_OF_VIEW);
+    plane_x = -render_fov_by_direction[
+        (uint16_t)(dir_y + FIXED_ONE)
+    ];
+    plane_y = render_fov_by_direction[
+        (uint16_t)(dir_x + FIXED_ONE)
+    ];
     ray_stepper_init(&ray_x, dir_x, plane_x);
     ray_stepper_init(&ray_y, dir_y, plane_y);
     render_scratch.primary_tile = game->primary.valid ?
         (uint8_t)(map_row_offsets[game->primary.y] + game->primary.x) : 0xFFu;
     render_scratch.secondary_tile = game->secondary.valid ?
         (uint8_t)(map_row_offsets[game->secondary.y] + game->secondary.x) : 0xFFu;
+#if RENDER_ASM_RAYCAST
+    render_ray_state.game = game;
+    render_ray_state.primary_tile = render_scratch.primary_tile;
+    render_ray_state.secondary_tile = render_scratch.secondary_tile;
+#endif
 
 #if RENDER_PROFILE
     mark = clock();
@@ -2787,11 +3029,19 @@ void game_render(const GameState *game) {
 
     RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_BACKGROUND);
     draw_background_grid(game, dir_x, dir_y);
+#if RENDER_ASM_BACKGROUND
+    /*
+     * Grid lines can enter the horizon only on ceiling rows 112-113 and
+     * floor row 127. Repair those rows instead of rewriting all 16 rows.
+     */
+    render_asm_repair_horizon();
+#else
     memset(
         &gfx_vbuffer[0][0] + GFX_LCD_WIDTH * 112u,
         COLOR_SKY_HORIZON,
         GFX_LCD_WIDTH * 16u
     );
+#endif
     RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
 
 #if RENDER_PROFILE
@@ -2805,14 +3055,11 @@ void game_render(const GameState *game) {
             game,
             column * COLUMN_WIDTH,
             ray_x.value,
-            ray_y.value,
-            player_map_x,
-            player_map_y
+            ray_y.value
         );
         ray_stepper_advance(&ray_x);
         ray_stepper_advance(&ray_y);
     }
-
 
 #if RENDER_PROFILE
     render_profile.columns_ticks = clock() - mark;

@@ -19,8 +19,11 @@
 
 #define GAME_RENDER_LOGICAL_COLUMNS 80
 #define GAME_RENDER_COLUMN_WIDTH 4
-#define GAME_RENDER_TEXTURE_SIZE 16
+#define GAME_RENDER_TEXTURE_WIDTH 16
+#define GAME_RENDER_TEXTURE_HEIGHT 8
 #define GAME_RENDER_MAX_PORTAL_DEPTH 6
+/* Stable YYMMDD/revision ID shared by every benchmark program variant. */
+#define GAME_BUILD_VERSION 0x26072904UL
 
 typedef int24_t fixed_t;
 

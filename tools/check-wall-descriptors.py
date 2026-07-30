@@ -5,13 +5,15 @@ from __future__ import annotations
 
 
 MATERIALS = 4
-SIZE = 16
+WIDTH = 16
+HEIGHT = 8
 DESCRIPTOR_SIZE = 2
 FIXED_ONE = 256
 MAX_POSITIVE_DISTANCE = 0x7FFFFF
 
 
 def texel(material: int, x: int, y: int) -> int:
+    y *= 2
     if material == 0:
         mortar = x == 0 or y == 0 or y == 8 or (y >= 8 and x == 8)
         noise = (x * 5 + y * 3 + ((x ^ y) * 7)) & 3
@@ -73,35 +75,40 @@ def check_distance_shade_tiers() -> None:
 
 
 def main() -> None:
-    descriptor_count = MATERIALS * SIZE * SIZE
+    descriptor_count = MATERIALS * WIDTH * HEIGHT
     descriptors = bytearray(descriptor_count * DESCRIPTOR_SIZE + 1)
     checked = 0
 
     for material in range(MATERIALS):
-        for x in range(SIZE):
-            column = [texel(material, x, y) for y in range(SIZE)]
-            assembly_base = ((material * SIZE * SIZE) + x * SIZE) * DESCRIPTOR_SIZE
+        for x in range(WIDTH):
+            column = [texel(material, x, y) for y in range(HEIGHT)]
+            assembly_base = (
+                (material * WIDTH * HEIGHT) + x * HEIGHT
+            ) * DESCRIPTOR_SIZE
+            assert assembly_base == (material << 8) | (x << 4)
 
             for y, value in enumerate(column):
                 next_y = y + 1
-                while next_y < SIZE and column[next_y] == value:
+                while next_y < HEIGHT and column[next_y] == value:
                     next_y += 1
 
                 descriptor = (
-                    (material * SIZE * SIZE + x * SIZE + y) * DESCRIPTOR_SIZE
+                    (material * WIDTH * HEIGHT + x * HEIGHT + y) *
+                    DESCRIPTOR_SIZE
                 )
                 assert descriptor == assembly_base + y * DESCRIPTOR_SIZE
                 descriptors[descriptor] = value * 4
                 descriptors[descriptor + 1] = next_y
                 assert 0 <= value <= 7
-                assert y < next_y <= SIZE
+                assert y < next_y <= HEIGHT
                 checked += 1
 
     for material in range(MATERIALS):
-        for x in range(SIZE):
-            for y in range(SIZE):
+        for x in range(WIDTH):
+            for y in range(HEIGHT):
                 descriptor = (
-                    (material * SIZE * SIZE + x * SIZE + y) * DESCRIPTOR_SIZE
+                    (material * WIDTH * HEIGHT + x * HEIGHT + y) *
+                    DESCRIPTOR_SIZE
                 )
                 value = descriptors[descriptor]
                 next_y = descriptors[descriptor + 1]
@@ -110,7 +117,10 @@ def main() -> None:
                     texel(material, x, row) * 4 == value
                     for row in range(y, next_y)
                 )
-                assert next_y == SIZE or texel(material, x, next_y) * 4 != value
+                assert (
+                    next_y == HEIGHT or
+                    texel(material, x, next_y) * 4 != value
+                )
 
     # Assembly uses a three-byte load to fetch each two-byte descriptor.
     assert len(descriptors) == descriptor_count * DESCRIPTOR_SIZE + 1
@@ -121,7 +131,5 @@ def main() -> None:
         "wall/portal shade tiers exact: "
         f"{MAX_POSITIVE_DISTANCE:,} positive 24-bit distances"
     )
-
-
 if __name__ == "__main__":
     main()

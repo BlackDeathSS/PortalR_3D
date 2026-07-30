@@ -3,7 +3,7 @@
 
 The calculator writes a compact P3DLIV1 payload to the P3DLIVE AppVar.  This
 tool accepts the raw payload, a transferred TI .8xv file, raw AppVar data, or a
-CEmu RAM dump containing exactly one CRC-valid payload.
+CEmu RAM dump containing one unique CRC-valid payload.
 """
 
 from __future__ import annotations
@@ -412,14 +412,19 @@ def extract_payload(blob: bytes) -> tuple[bytes, WrapperInfo]:
         raise DecodeError(
             "input is not a raw/TI AppVar and contains no CRC-valid P3DLIV1 payload"
         )
-    if len(valid) != 1:
+    unique: dict[bytes, list[int]] = {}
+    for offset, payload in valid:
+        unique.setdefault(payload, []).append(offset)
+    if len(unique) != 1:
         offsets = ", ".join(f"0x{offset:X}" for offset, _ in valid)
         raise DecodeError(
-            f"RAM dump contains {len(valid)} CRC-valid P3DLIV1 payloads "
-            f"at {offsets}; expected exactly one"
+            f"RAM dump contains {len(unique)} distinct CRC-valid P3DLIV1 "
+            f"payloads at {offsets}; expected one unique result"
         )
-    offset, payload = valid[0]
-    return payload, WrapperInfo(kind="cemu-ram-dump", dump_offset=offset)
+    payload, offsets = next(iter(unique.items()))
+    return payload, WrapperInfo(
+        kind="cemu-ram-dump", dump_offset=offsets[0]
+    )
 
 
 def parse_payload(
@@ -1908,10 +1913,16 @@ def run_self_test() -> None:
     assert extracted == payload
     assert wrapper.kind == "cemu-ram-dump" and wrapper.dump_offset == 137
 
+    duplicate_dump = payload + b"\0" * 16 + payload
+    extracted, wrapper = extract_payload(duplicate_dump)
+    assert extracted == payload
+    assert wrapper.kind == "cemu-ram-dump"
+
+    distinct_payload = _make_test_payload(diagnostic_replay=True)
     try:
-        extract_payload(payload + b"\0" * 16 + payload)
+        extract_payload(payload + b"\0" * 16 + distinct_payload)
     except DecodeError as exc:
-        assert "2 CRC-valid" in str(exc)
+        assert "2 distinct CRC-valid" in str(exc)
     else:
         raise AssertionError("ambiguous RAM dump was accepted")
 

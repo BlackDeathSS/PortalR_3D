@@ -2,8 +2,9 @@
 """Decode PortalR 3D benchmark AppVars.
 
 The calculator benchmark writes a compact, checksummed P3DBEN2 payload to the
-P3DRES AppVar.  This tool accepts either the transferred .8xv file or the raw
-payload and emits machine-readable samples, per-scene summaries, and JSON.
+P3DRES AppVar.  This tool accepts the transferred .8xv file, raw AppVar data,
+the raw payload, or a CEmu RAM dump containing one unique CRC-valid payload,
+and emits machine-readable samples, per-scene summaries, and JSON.
 
 Only the Python standard library is used so the decoder can travel with the
 project without adding a host-side dependency.
@@ -67,6 +68,7 @@ class WrapperInfo:
     archived: bool | None = None
     comment: str | None = None
     wrapper_checksum: int | None = None
+    dump_offset: int | None = None
 
 
 @dataclass(frozen=True)
@@ -181,27 +183,105 @@ def _hex32(value: int) -> str:
     return f"0x{value:08X}"
 
 
-def extract_payload(blob: bytes) -> tuple[bytes, WrapperInfo]:
-    """Extract and validate a P3DBEN payload from raw bytes or a TI AppVar."""
+def _candidate_payload(blob: bytes, offset: int) -> bytes | None:
+    """Return a structurally plausible, CRC-valid payload at *offset*."""
 
-    if blob.startswith(MAGIC):
-        return blob, WrapperInfo(kind="raw")
+    if offset < 0 or offset + HEADER_SIZE > len(blob):
+        return None
+    if blob[offset : offset + len(MAGIC)] != MAGIC:
+        return None
+
+    view = blob[offset:]
+    if _u16(view, 8) != FORMAT_VERSION or _u16(view, 10) != HEADER_SIZE:
+        return None
+
+    payload_size = _u16(view, 32)
+    if payload_size < HEADER_SIZE or payload_size > len(view):
+        return None
+
+    scene_count = _u16(view, 34)
+    scene_record_size = _u16(view, 40)
+    sample_record_size = _u16(view, 42)
+    if (
+        scene_record_size != SCENE_RECORD_SIZE
+        or sample_record_size != SAMPLE_RECORD_SIZE
+    ):
+        return None
+
+    scene_block_end = HEADER_SIZE + scene_count * scene_record_size
+    if (
+        scene_block_end > payload_size
+        or (payload_size - scene_block_end) % sample_record_size
+    ):
+        return None
+
+    payload = bytes(view[:payload_size])
+    if (zlib.crc32(payload[HEADER_SIZE:]) & 0xFFFFFFFF) != _u32(payload, 56):
+        return None
+    return payload
+
+
+def extract_payload(blob: bytes) -> tuple[bytes, WrapperInfo]:
+    """Extract a P3DBEN2 payload from every supported container."""
+
+    if blob.startswith(MAGIC) and len(blob) >= HEADER_SIZE:
+        declared_size = _u16(blob, 32)
+        if declared_size == len(blob):
+            # Preserve precise parser diagnostics for a corrupt raw payload
+            # instead of degrading them to the RAM scanner's "not found".
+            return bytes(blob), WrapperInfo(kind="raw")
 
     # Some dumping tools return the AppVar's data field, including its inner
     # two-byte length, instead of either a .8xv wrapper or the pure payload.
-    if len(blob) >= 2 + len(MAGIC) and blob[2 : 2 + len(MAGIC)] == MAGIC:
+    if len(blob) >= 2 + HEADER_SIZE and blob[2 : 2 + len(MAGIC)] == MAGIC:
         inner_size = _u16(blob, 0)
         if inner_size != len(blob) - 2:
             raise DecodeError(
                 f"raw AppVar data length says {inner_size} bytes, "
                 f"but {len(blob) - 2} bytes follow"
             )
-        return blob[2:], WrapperInfo(kind="raw-appvar-data")
+        payload = bytes(blob[2:])
+        if _candidate_payload(payload, 0) is None:
+            raise DecodeError("raw AppVar data contains an invalid payload")
+        return payload, WrapperInfo(kind="raw-appvar-data")
 
-    if not blob.startswith(b"**TI83F*"):
+    if blob.startswith(b"**TI83F*"):
+        return _extract_ti_appvar(blob)
+
+    valid: list[tuple[int, bytes]] = []
+    start = 0
+    while True:
+        offset = blob.find(MAGIC, start)
+        if offset < 0:
+            break
+        candidate = _candidate_payload(blob, offset)
+        if candidate is not None:
+            valid.append((offset, candidate))
+        start = offset + 1
+
+    if not valid:
         raise DecodeError(
-            "input is neither a raw P3DBEN2 payload nor a TI-83F variable file"
+            "input is not a raw/TI AppVar and contains no CRC-valid "
+            "P3DBEN2 payload"
         )
+    unique: dict[bytes, list[int]] = {}
+    for offset, payload in valid:
+        unique.setdefault(payload, []).append(offset)
+    if len(unique) != 1:
+        offsets = ", ".join(f"0x{offset:X}" for offset, _ in valid)
+        raise DecodeError(
+            f"RAM dump contains {len(unique)} distinct CRC-valid P3DBEN2 "
+            f"payloads at {offsets}; expected one unique result"
+        )
+    payload, offsets = next(iter(unique.items()))
+    return payload, WrapperInfo(
+        kind="cemu-ram-dump", dump_offset=offsets[0]
+    )
+
+
+def _extract_ti_appvar(blob: bytes) -> tuple[bytes, WrapperInfo]:
+    """Extract and validate a P3DBEN2 payload from a TI AppVar wrapper."""
+
     if len(blob) < 55 + 19 + 2:
         raise DecodeError("TI variable file is truncated")
     if (
@@ -1032,6 +1112,8 @@ def _wrapper_json(wrapper: WrapperInfo) -> dict[str, Any]:
                 "checksum": f"0x{wrapper.wrapper_checksum:04X}",
             }
         )
+    if wrapper.dump_offset is not None:
+        result["dump_offset"] = wrapper.dump_offset
     return result
 
 
@@ -1250,6 +1332,30 @@ def run_self_test() -> None:
     assert first_summary["counts"]["portal_transforms"]["mean"] == 4
     assert first_summary["counts"]["dda_steps"]["mean"] == 240
 
+    raw_appvar = struct.pack("<H", len(payload)) + payload
+    extracted, wrapper_info = extract_payload(raw_appvar)
+    assert extracted == payload
+    assert wrapper_info.kind == "raw-appvar-data"
+
+    dump = b"\xA5" * 137 + payload + b"\x5A" * 211
+    extracted, wrapper_info = extract_payload(dump)
+    assert extracted == payload
+    assert wrapper_info.kind == "cemu-ram-dump"
+    assert wrapper_info.dump_offset == 137
+
+    duplicate_dump = payload + b"\0" * 16 + payload
+    extracted, wrapper_info = extract_payload(duplicate_dump)
+    assert extracted == payload
+    assert wrapper_info.kind == "cemu-ram-dump"
+
+    distinct_payload = _make_test_payload(tick_delta=1)
+    try:
+        extract_payload(payload + b"\0" * 16 + distinct_payload)
+    except DecodeError as exc:
+        assert "2 distinct CRC-valid" in str(exc)
+    else:
+        raise AssertionError("ambiguous RAM dump was accepted")
+
     comparison_payload = _make_test_payload(frame_hash_delta=1, tick_delta=-100)
     comparison_report = parse_payload(
         comparison_payload, Path("comparison.raw"), WrapperInfo(kind="raw")
@@ -1306,7 +1412,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "input",
         nargs="?",
         type=Path,
-        help="P3DRES.8xv or raw P3DBEN2 payload",
+        help="P3DRES.8xv, raw P3DBEN2 payload, or CEmu RAM dump",
     )
     parser.add_argument(
         "--compare",
@@ -1326,7 +1432,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--self-test",
         action="store_true",
-        help="run synthetic raw/AppVar/CRC/output tests and exit",
+        help="run synthetic raw/AppVar/RAM-dump/CRC/output tests and exit",
     )
     parser.add_argument(
         "--quiet",

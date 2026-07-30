@@ -20,6 +20,7 @@
 #if RENDER_LIVE_BENCHMARK
 
 #define LIVE_MAGIC "P3DLIV1"
+#define LIVE_FORMAT_VERSION 1u
 #define LIVE_RESULT_NAME "P3DLIVE"
 #define LIVE_TEMP_NAME "P3DLTMP"
 
@@ -159,9 +160,6 @@ static uint8_t *live_report;
 static uint8_t live_report_handle;
 static GameState live_game;
 
-extern const uint8_t _start[];
-extern const uint8_t __data_low[];
-
 _Static_assert(LIVE_REPORT_SIZE < 65536u,
     "Live benchmark report must fit in one AppVar");
 _Static_assert(GAME_RENDER_BENCH_CATEGORY_COUNT == 7,
@@ -187,6 +185,19 @@ static void write_u32(uint8_t *destination, uint32_t value) {
     destination[1] = (uint8_t)(value >> 8);
     destination[2] = (uint8_t)(value >> 16);
     destination[3] = (uint8_t)(value >> 24);
+}
+
+static void live_put_hex32(uint32_t value) {
+    static const char digits[] = "0123456789ABCDEF";
+    char text[9];
+    uint8_t index = 8;
+
+    text[8] = '\0';
+    do {
+        text[--index] = digits[value & 0x0Fu];
+        value >>= 4;
+    } while (index != 0);
+    os_PutStrFull(text);
 }
 
 static uint16_t clamp_u16(uint32_t value) {
@@ -245,14 +256,7 @@ static uint32_t live_game_hash(const GameState *game) {
 }
 
 static uint32_t live_build_fingerprint(void) {
-    const uint8_t *cursor = _start;
-    uint32_t hash = 2166136261UL;
-
-    while (cursor != __data_low) {
-        hash ^= *cursor++;
-        hash *= 16777619UL;
-    }
-    return hash;
+    return GAME_BUILD_VERSION;
 }
 
 static uint32_t live_route_fingerprint(void) {
@@ -287,6 +291,22 @@ static uint8_t *live_frame_record(uint16_t frame) {
 }
 
 static uint8_t live_prepare_report(void) {
+#if LIVE_BENCHMARK_AUTOTEST_HOLD
+    /*
+     * A failed autotest must not leave the decoder free to rediscover a
+     * previous successful payload in calculator RAM.
+     */
+    uint8_t previous_handle = ti_Open(LIVE_RESULT_NAME, "r+");
+
+    if (previous_handle != 0) {
+        uint8_t *previous_report = ti_GetDataPtr(previous_handle);
+
+        if (previous_report != NULL && ti_GetSize(previous_handle) != 0) {
+            previous_report[0] = 0;
+        }
+        ti_Close(previous_handle);
+    }
+#endif
     (void)ti_Delete(LIVE_TEMP_NAME);
     live_report_handle = ti_Open(LIVE_TEMP_NAME, "w");
     if (live_report_handle == 0) {
@@ -762,6 +782,7 @@ static uint8_t live_run_diagnostics(
 }
 
 static void live_write_header(
+    uint32_t build_fingerprint,
     uint32_t switch_cost_q8,
     uint32_t graphics_init_ticks,
     uint32_t first_frame_ticks,
@@ -790,12 +811,12 @@ static void live_write_header(
     uint32_t body_crc;
 
     memcpy(header, LIVE_MAGIC, 7);
-    write_u16(header + 8, 1);
+    write_u16(header + 8, LIVE_FORMAT_VERSION);
     write_u16(header + 10, LIVE_HEADER_SIZE);
     write_u32(header + 12, flags);
     write_u32(header + 16, CLOCKS_PER_SEC);
     write_u32(header + 20, LIVE_TRACE_TIMER_HZ);
-    write_u32(header + 24, live_build_fingerprint());
+    write_u32(header + 24, build_fingerprint);
     write_u32(header + 28, live_route_fingerprint());
     write_u16(header + 32, LIVE_REPORT_SIZE);
     write_u16(header + 34, LIVE_SECTION_COUNT);
@@ -805,7 +826,7 @@ static void live_write_header(
     write_u16(header + 42, LIVE_FRAME_RECORD_SIZE);
     write_u16(header + 44, GAME_RENDER_LOGICAL_COLUMNS);
     header[46] = GAME_RENDER_COLUMN_WIDTH;
-    header[47] = GAME_RENDER_TEXTURE_SIZE;
+    header[47] = GAME_RENDER_TEXTURE_HEIGHT;
     header[48] = GAME_RENDER_MAX_PORTAL_DEPTH;
     header[49] = GAME_RENDER_BENCH_CATEGORY_COUNT;
     write_u16(header + 50, LIVE_TICKS_PER_SECOND);
@@ -846,7 +867,8 @@ static void live_show_failure(const char *message) {
 static void live_show_result(
     uint8_t saved,
     uint8_t archived,
-    uint16_t crossings
+    uint16_t crossings,
+    uint32_t build_fingerprint
 ) {
     os_ClrHome();
     os_SetCursorPos(0, 0);
@@ -858,11 +880,16 @@ static void live_show_result(
         os_PutStrFull("Portal crossings: ");
         os_PutStrFull(crossings == LIVE_EXPECTED_CROSSINGS ? "6" : "ERROR");
         os_SetCursorPos(5, 0);
-        os_PutStrFull("Result: P3DLIVE");
+        os_PutStrFull("Format: " LIVE_MAGIC);
         os_SetCursorPos(6, 0);
+        os_PutStrFull("Build: 0x");
+        live_put_hex32(build_fingerprint);
+        os_SetCursorPos(7, 0);
+        os_PutStrFull("Result: P3DLIVE");
+        os_SetCursorPos(8, 0);
         os_PutStrFull(archived ? "Archived safely" : "Saved in RAM");
     }
-    os_SetCursorPos(8, 0);
+    os_SetCursorPos(9, 0);
     os_PutStrFull("Press any key");
     while (os_GetCSC() != 0) {
     }
@@ -880,6 +907,7 @@ int live_benchmark_run(void) {
     uint32_t state_hash;
     uint32_t final_frame_hash = 0;
     uint32_t wall_ticks;
+    uint32_t build_fingerprint;
     uint16_t crossings;
     uint16_t detailed_frames = 0;
     clock_t started;
@@ -926,7 +954,9 @@ int live_benchmark_run(void) {
         &final_frame_hash,
         &detailed_frames
     );
+    build_fingerprint = live_build_fingerprint();
     live_write_header(
+        build_fingerprint,
         switch_cost_q8,
         graphics_init_ticks,
         first_frame_ticks,
@@ -963,7 +993,7 @@ int live_benchmark_run(void) {
     }
 #endif
 
-    live_show_result(saved, archived, crossings);
+    live_show_result(saved, archived, crossings, build_fingerprint);
     return saved ? 0 : 1;
 }
 

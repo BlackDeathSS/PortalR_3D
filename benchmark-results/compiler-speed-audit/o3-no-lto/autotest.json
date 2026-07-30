@@ -1,0 +1,27 @@
+{
+  "rom": "D:/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/bin/P3A3NL.8xp"
+  ],
+  "target": {
+    "name": "P3A3NL",
+    "isASM": true
+  },
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|30000",
+    "hash|result"
+  ],
+  "hashes": {
+    "result": {
+      "description": "Intentional full-RAM dump after benchmark completion",
+      "start": "ram_start",
+      "size": "ram_size",
+      "expected_CRCs": [
+        "00000000"
+      ]
+    }
+  }
+}

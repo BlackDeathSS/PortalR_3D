@@ -7,8 +7,9 @@ COMPRESSED = NO
 ARCHIVED = YES
 OUTPUT_MAP = YES
 
-CFLAGS = -Wall -Wextra -Wshadow -Oz -fstack-usage
-CXXFLAGS = -Wall -Wextra -Wshadow -Oz -fstack-usage
+OPTIMIZE ?= -Oz
+CFLAGS = -Wall -Wextra -Wshadow $(OPTIMIZE) -fstack-usage
+CXXFLAGS = -Wall -Wextra -Wshadow $(OPTIMIZE) -fstack-usage
 OBJDIR = obj/release
 BUDGET_MAP = bin/PORTAL3D.map
 
@@ -76,6 +77,26 @@ endif
 LTO = YES
 PREFER_OS_CRT = YES
 PREFER_OS_LIBC = YES
+
+# Optional per-translation-unit overrides make optimizer bisects reproducible.
+# They are intentionally empty in release builds; the last -O flag wins.
+BENCHMARK_OPTIMIZE ?=
+GAME_OPTIMIZE ?=
+LIVE_BENCHMARK_OPTIMIZE ?=
+MAIN_OPTIMIZE ?=
+
+ifneq ($(strip $(BENCHMARK_OPTIMIZE)),)
+$(OBJDIR)/src/benchmark.c.s $(OBJDIR)/src/benchmark.c.bc: CFLAGS += $(BENCHMARK_OPTIMIZE)
+endif
+ifneq ($(strip $(GAME_OPTIMIZE)),)
+$(OBJDIR)/src/game.c.s $(OBJDIR)/src/game.c.bc: CFLAGS += $(GAME_OPTIMIZE)
+endif
+ifneq ($(strip $(LIVE_BENCHMARK_OPTIMIZE)),)
+$(OBJDIR)/src/live_benchmark.c.s $(OBJDIR)/src/live_benchmark.c.bc: CFLAGS += $(LIVE_BENCHMARK_OPTIMIZE)
+endif
+ifneq ($(strip $(MAIN_OPTIMIZE)),)
+$(OBJDIR)/src/main.c.s $(OBJDIR)/src/main.c.bc: CFLAGS += $(MAIN_OPTIMIZE)
+endif
 
 include $(shell cedev-config --makefile)
 

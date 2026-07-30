@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import random
+import re
 
 
 BIAS = 0x800000
@@ -12,6 +14,120 @@ MASK24 = 0xFFFFFF
 FIXED_INF = 0x3FFFFF
 EDGE_Q = (0, 1, 2, 3, 127, 128, 129, 253, 254, 255, 256)
 EDGE_COMPONENT = (0, 1, 2, 3, 4, 25, 154, 255, 256, 257, 424, 425)
+EDGE_FRACTION = (0, 1, 2, 3, 127, 128, 129, 253, 254, 255)
+SIGNED_EDGE_COMPONENT = tuple(
+    sorted({value for magnitude in EDGE_COMPONENT for value in (-magnitude, magnitude)})
+)
+
+EXPECTED_STATE_LAYOUT = {
+    "STATE_ORIGIN_X": 0,
+    "STATE_ORIGIN_Y": 3,
+    "STATE_RAY_X": 6,
+    "STATE_RAY_Y": 9,
+    "STATE_DELTA_X": 12,
+    "STATE_DELTA_Y": 15,
+    "STATE_QX": 18,
+    "STATE_QY": 21,
+    "STATE_ABS_X_SHIFT": 24,
+    "STATE_ABS_X": 25,
+    "STATE_ABS_Y_SHIFT": 27,
+    "STATE_ABS_Y": 28,
+    "STATE_ABS_END": 30,
+    "STATE_THRESHOLD": 31,
+    "STATE_MAP_STEP_X": 34,
+    "STATE_MAP_STEP_Y": 37,
+    "STATE_HIT": 40,
+    "STATE_GAME": 43,
+    "STATE_PRIMARY_TILE": 46,
+    "STATE_SECONDARY_TILE": 47,
+    "STATE_PORTAL_EXIT": 48,
+    "STATE_PORTAL_KIND": 52,
+    "STATE_PORTAL_ID": 53,
+    "STATE_PORTAL_HAS_EXIT": 54,
+    "STATE_SIZE": 55,
+}
+
+
+def parse_state_layout(assembly_path: Path) -> None:
+    source = assembly_path.read_text(encoding="utf-8")
+    found = {
+        name: int(value, 0)
+        for name, value in re.findall(
+            r"^\s*\.equ\s+(STATE_[A-Z0-9_]+),\s*(0x[0-9A-Fa-f]+|\d+)\s*$",
+            source,
+            flags=re.MULTILINE,
+        )
+    }
+    if found != EXPECTED_STATE_LAYOUT:
+        raise AssertionError(
+            "persistent DDA state layout mismatch:\n"
+            f"  assembly={found}\n"
+            f"  expected={EXPECTED_STATE_LAYOUT}"
+        )
+    if not re.search(
+        r"^_render_ray_state:\s*\r?\n\s*\.zero\s+STATE_SIZE\s*$",
+        source,
+        flags=re.MULTILINE,
+    ):
+        raise AssertionError("persistent DDA state allocation not found")
+
+
+def persistent_seed(
+    fraction_x: int,
+    fraction_y: int,
+    ray_x: int,
+    ray_y: int,
+) -> tuple[int, int, int, int, int, int, int, int, int]:
+    ax = abs(ray_x)
+    ay = abs(ray_y)
+    qx = fraction_x if ray_x < 0 else 256 - fraction_x
+    qy = fraction_y if ray_y < 0 else 256 - fraction_y
+    delta_x = reciprocal_delta(ax)
+    delta_y = reciprocal_delta(ay)
+    threshold = (ax + ay) << 8
+    recurrence = qx * ay + (256 - qy) * ax
+    step_x = -1 if ray_x < 0 else 1
+    step_y = -16 if ray_y < 0 else 16
+    axis_mode = (
+        2 if ray_x == 0 and fraction_x == 0
+        else 1 if ray_y == 0 and fraction_y == 0
+        else 0
+    )
+
+    # Verify the assembly's overlapping shifted/unshifted magnitude loads.
+    packed = bytes((
+        0,
+        ax & 0xFF,
+        (ax >> 8) & 0xFF,
+        0,
+        ay & 0xFF,
+        (ay >> 8) & 0xFF,
+        0,
+    ))
+    if int.from_bytes(packed[0:3], "little") != ax << 8:
+        raise AssertionError(("packed abs_x shift", ax, packed))
+    if int.from_bytes(packed[1:4], "little") != ax:
+        raise AssertionError(("packed abs_x", ax, packed))
+    if int.from_bytes(packed[3:6], "little") != ay << 8:
+        raise AssertionError(("packed abs_y shift", ay, packed))
+    if int.from_bytes(packed[4:7], "little") != ay:
+        raise AssertionError(("packed abs_y", ay, packed))
+
+    if not 0 <= recurrence <= MASK24:
+        raise AssertionError(
+            ("persistent recurrence range", qx, qy, ray_x, ray_y, recurrence)
+        )
+    return (
+        qx,
+        qy,
+        delta_x,
+        delta_y,
+        threshold,
+        recurrence,
+        step_x,
+        step_y,
+        axis_mode,
+    )
 
 
 def reciprocal_delta(component: int) -> int:
@@ -213,8 +329,50 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples", type=int, default=150_000)
     parser.add_argument("--seed", type=int, default=0xDDA84CE)
+    parser.add_argument(
+        "--assembly",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "src" / "render_asm.s",
+    )
     args = parser.parse_args()
     rng = random.Random(args.seed)
+    parse_state_layout(args.assembly)
+
+    state_cases = 0
+    for fraction_x in EDGE_FRACTION:
+        for fraction_y in EDGE_FRACTION:
+            for ray_x in SIGNED_EDGE_COMPONENT:
+                for ray_y in SIGNED_EDGE_COMPONENT:
+                    if ray_x == ray_y == 0:
+                        continue
+                    state = persistent_seed(
+                        fraction_x, fraction_y, ray_x, ray_y
+                    )
+                    qx, qy, delta_x, delta_y, threshold, recurrence, sx, sy, axis = state
+                    if qx != (fraction_x if ray_x < 0 else 256 - fraction_x):
+                        raise AssertionError(("state qx", state))
+                    if qy != (fraction_y if ray_y < 0 else 256 - fraction_y):
+                        raise AssertionError(("state qy", state))
+                    if delta_x != reciprocal_delta(abs(ray_x)):
+                        raise AssertionError(("state delta_x", state))
+                    if delta_y != reciprocal_delta(abs(ray_y)):
+                        raise AssertionError(("state delta_y", state))
+                    if threshold != (abs(ray_x) + abs(ray_y)) << 8:
+                        raise AssertionError(("state threshold", state))
+                    if recurrence != qx * abs(ray_y) + (256 - qy) * abs(ray_x):
+                        raise AssertionError(("state recurrence", state))
+                    if sx != (-1 if ray_x < 0 else 1):
+                        raise AssertionError(("state step_x", state))
+                    if sy != (-16 if ray_y < 0 else 16):
+                        raise AssertionError(("state step_y", state))
+                    expected_axis = (
+                        2 if ray_x == 0 and fraction_x == 0
+                        else 1 if ray_y == 0 and fraction_y == 0
+                        else 0
+                    )
+                    if axis != expected_axis:
+                        raise AssertionError(("state axis", state, expected_axis))
+                    state_cases += 1
 
     algebra_cases = 0
     for qx in EDGE_Q:
@@ -292,6 +450,7 @@ def main() -> None:
         # two-cell ownership path, not the generic accumulator under test.
         if (ray_x == 0 and fraction_x == 0) or (ray_y == 0 and fraction_y == 0):
             continue
+        persistent_seed(fraction_x, fraction_y, ray_x, ray_y)
         total_steps += check_cast(
             wall_map,
             start_x,
@@ -304,7 +463,8 @@ def main() -> None:
         cast_cases += 1
 
     print(
-        f"exact DDA OK: {algebra_cases} edge products, "
+        f"exact DDA OK: {state_cases} persistent-state boundary seeds, "
+        f"{algebra_cases} edge products, "
         f"{axis_cases} axis-boundary casts/{axis_steps} steps, "
         f"{cast_cases} bordered-map casts/{total_steps} steps"
     )

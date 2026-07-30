@@ -23,6 +23,7 @@
 #if RENDER_BENCHMARK && !RENDER_LIVE_BENCHMARK
 
 #define BENCHMARK_MAGIC "P3DBEN2"
+#define BENCHMARK_FORMAT_VERSION 2u
 #define BENCHMARK_RESULT_NAME "P3DRES"
 #define BENCHMARK_TEMP_NAME "P3DTMP"
 
@@ -111,9 +112,6 @@ static const BenchmarkScene benchmark_scenes[BENCHMARK_SCENE_COUNT] = {
 static uint8_t benchmark_report[BENCHMARK_REPORT_SIZE];
 static GameState benchmark_game;
 
-extern const uint8_t _start[];
-extern const uint8_t __data_low[];
-
 _Static_assert(BENCHMARK_REPORT_SIZE < 65536u,
     "Benchmark report must fit in one AppVar write");
 _Static_assert(GAME_RENDER_BENCH_CATEGORY_COUNT == 7,
@@ -137,6 +135,19 @@ static void write_u32(uint8_t *destination, uint32_t value) {
     destination[1] = (uint8_t)(value >> 8);
     destination[2] = (uint8_t)(value >> 16);
     destination[3] = (uint8_t)(value >> 24);
+}
+
+static void benchmark_put_hex32(uint32_t value) {
+    static const char digits[] = "0123456789ABCDEF";
+    char text[9];
+    uint8_t index = 8;
+
+    text[8] = '\0';
+    do {
+        text[--index] = digits[value & 0x0Fu];
+        value >>= 4;
+    } while (index != 0);
+    os_PutStrFull(text);
 }
 
 static uint16_t clamp_u16(uint32_t value) {
@@ -173,14 +184,7 @@ static uint32_t benchmark_frame_hash(void) {
 }
 
 static uint32_t benchmark_build_fingerprint(void) {
-    const uint8_t *cursor = _start;
-    uint32_t hash = 2166136261UL;
-
-    while (cursor != __data_low) {
-        hash ^= *cursor++;
-        hash *= 16777619UL;
-    }
-    return hash;
+    return GAME_BUILD_VERSION;
 }
 
 static void benchmark_load_scene(const BenchmarkScene *scene) {
@@ -309,7 +313,10 @@ static void benchmark_render_sample(uint16_t sample_index, uint8_t detailed) {
     gfx_SwapDraw();
 }
 
-static void benchmark_write_header(uint32_t switch_cost_q8) {
+static void benchmark_write_header(
+    uint32_t build_fingerprint,
+    uint32_t switch_cost_q8
+) {
     uint8_t *header = benchmark_report;
     uint32_t flags =
         BENCHMARK_FLAG_STAGE_TIMINGS |
@@ -322,12 +329,12 @@ static void benchmark_write_header(uint32_t switch_cost_q8) {
     uint32_t body_crc;
 
     memcpy(header, BENCHMARK_MAGIC, 7);
-    write_u16(header + 8, 2);
+    write_u16(header + 8, BENCHMARK_FORMAT_VERSION);
     write_u16(header + 10, BENCHMARK_HEADER_SIZE);
     write_u32(header + 12, flags);
     write_u32(header + 16, CLOCKS_PER_SEC);
     write_u32(header + 20, BENCHMARK_TRACE_TIMER_HZ);
-    write_u32(header + 24, benchmark_build_fingerprint());
+    write_u32(header + 24, build_fingerprint);
     write_u32(header + 28, BENCHMARK_SUITE_FINGERPRINT);
     write_u16(header + 32, BENCHMARK_REPORT_SIZE);
     write_u16(header + 34, BENCHMARK_SCENE_COUNT);
@@ -337,7 +344,7 @@ static void benchmark_write_header(uint32_t switch_cost_q8) {
     write_u16(header + 42, BENCHMARK_SAMPLE_RECORD_SIZE);
     write_u16(header + 44, GAME_RENDER_LOGICAL_COLUMNS);
     header[46] = GAME_RENDER_COLUMN_WIDTH;
-    header[47] = GAME_RENDER_TEXTURE_SIZE;
+    header[47] = GAME_RENDER_TEXTURE_HEIGHT;
     header[48] = GAME_RENDER_MAX_PORTAL_DEPTH;
     header[49] = 1;
     header[50] = GAME_RENDER_BENCH_CATEGORY_COUNT;
@@ -391,18 +398,27 @@ static uint8_t benchmark_archive_result(void) {
 }
 #endif
 
-static void benchmark_show_result(uint8_t saved, uint8_t archived) {
+static void benchmark_show_result(
+    uint8_t saved,
+    uint8_t archived,
+    uint32_t build_fingerprint
+) {
     os_ClrHome();
     os_SetCursorPos(0, 0);
     os_PutStrFull(saved ? "Benchmark complete" : "Benchmark failed");
     if (saved) {
         os_SetCursorPos(2, 0);
-        os_PutStrFull("Result: P3DRES");
+        os_PutStrFull("Format: " BENCHMARK_MAGIC);
         os_SetCursorPos(3, 0);
-        os_PutStrFull(archived ? "Archived safely" : "Saved in RAM");
+        os_PutStrFull("Build: 0x");
+        benchmark_put_hex32(build_fingerprint);
+        os_SetCursorPos(4, 0);
+        os_PutStrFull("Result: P3DRES");
         os_SetCursorPos(5, 0);
+        os_PutStrFull(archived ? "Archived safely" : "Saved in RAM");
+        os_SetCursorPos(7, 0);
         os_PutStrFull("Send P3DRES.8xv");
-        os_SetCursorPos(6, 0);
+        os_SetCursorPos(8, 0);
         os_PutStrFull("back to Codex.");
     } else {
         os_SetCursorPos(2, 0);
@@ -410,7 +426,7 @@ static void benchmark_show_result(uint8_t saved, uint8_t archived) {
         os_SetCursorPos(3, 0);
         os_PutStrFull("the result AppVar.");
     }
-    os_SetCursorPos(8, 0);
+    os_SetCursorPos(9, 0);
     os_PutStrFull("Press any key");
     while (os_GetCSC() != 0) {
     }
@@ -421,6 +437,7 @@ static void benchmark_show_result(uint8_t saved, uint8_t archived) {
 int benchmark_run(void) {
     uint16_t saved_timer_control;
     uint32_t saved_timer_count;
+    uint32_t build_fingerprint;
     uint32_t switch_cost_q8;
     uint8_t scene_index;
     uint8_t saved;
@@ -480,7 +497,8 @@ int benchmark_run(void) {
         gfx_SwapDraw();
     }
 
-    benchmark_write_header(switch_cost_q8);
+    build_fingerprint = benchmark_build_fingerprint();
+    benchmark_write_header(build_fingerprint, switch_cost_q8);
     saved = benchmark_save_result();
     gfx_End();
     if (saved) {
@@ -499,7 +517,7 @@ int benchmark_run(void) {
     timer_Set(3, saved_timer_count);
     timer_Control = saved_timer_control;
 
-    benchmark_show_result(saved, archived);
+    benchmark_show_result(saved, archived, build_fingerprint);
     return saved ? 0 : 1;
 }
 
