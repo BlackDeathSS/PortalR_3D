@@ -59,11 +59,17 @@
 #define WALL_BASE_COLOR_COUNT 8
 #define WALL_SHADE_LEVELS 4
 #define WALL_PALETTE_STRIDE (WALL_BASE_COLOR_COUNT * WALL_SHADE_LEVELS)
+#define WALL_PREPACKED_RUN_RECORD_SIZE 4u
+#define WALL_PREPACKED_RUN_RECORD_COUNT \
+    (WALL_TEXTURE_COUNT * WALL_SHADE_LEVELS * \
+        WALL_TEXTURE_WIDTH * WALL_TEXTURE_HEIGHT)
 #define FLOOR_NEAR_DISTANCE (FIXED_ONE + 4)
 #define FLOOR_FAR_DISTANCE (FIXED_ONE * 16)
 #define FLOOR_PROJECT_LIMIT 4096
 #define WALL_HEIGHT_TABLE_SHIFT 2
 #define WALL_HEIGHT_TABLE_SIZE 2048
+#define WALL_DISTANCE_TABLE_SIZE \
+    (WALL_HEIGHT_TABLE_SIZE << WALL_HEIGHT_TABLE_SHIFT)
 #define WALL_HEIGHT_NUMERATOR \
     ((GFX_LCD_HEIGHT * FIXED_ONE) >> WALL_HEIGHT_TABLE_SHIFT)
 #define FLOOR_NEAR_HEIGHT \
@@ -160,6 +166,24 @@ typedef struct {
 } RayHit;
 
 /*
+ * Affine exit geometry decoded once per portal link.  Eight-byte sizing is
+ * intentional: assembly can address a portal ID with three shifts, while the
+ * final byte keeps the tangent-axis choice out of the transform hot path.
+ */
+typedef struct __attribute__((packed)) {
+    fixed_t tangent_base;
+    fixed_t normal;
+    uint8_t flags;
+    uint8_t tangent_to_x;
+} PortalTransformPlan;
+
+#define RENDER_PORTAL_PLAN_COUNT 12u
+#define RENDER_PORTAL_FACE_COUNT (4u * 256u)
+#define RENDER_PORTAL_FACE_INVALID 0xFFFFu
+#define RENDER_PORTAL_FACE_LINKED 0x04u
+#define RENDER_PORTAL_FACE_ID_SHIFT 3u
+
+/*
  * One exact-DDA state is reused by every segment of the current logical ray.
  * The renderer is deliberately single-threaded and already uses fixed global
  * assembly scratch, so this removes repeated C ABI traffic without adding a
@@ -194,6 +218,7 @@ typedef struct __attribute__((packed)) {
     uint8_t portal_kind;
     uint8_t portal_id;
     uint8_t portal_has_exit;
+    const PortalTransformPlan *portal_plan;
 } RayDDAState;
 
 #if RENDER_ASM_RAYCAST
@@ -242,6 +267,20 @@ extern void render_asm_draw_wall_segment(
     uint8_t end,
     const WallContext *full_context
 );
+extern void render_asm_draw_wall_segment_registers(
+    const RayHit *ray,
+    uint24_t x,
+    uint8_t start,
+    uint8_t end,
+    const WallContext *full_context
+);
+extern void render_asm_draw_wall_segment_prepacked(
+    const RayHit *ray,
+    uint24_t x,
+    uint8_t start,
+    uint8_t end,
+    const WallContext *full_context
+);
 extern void render_asm_draw_solid_segment(
     uint24_t x,
     uint8_t start,
@@ -260,12 +299,7 @@ extern void render_asm_draw_portal_mask(
 #endif
 
 typedef struct {
-    RayHit layers[MAX_RENDER_PORTAL_DEPTH];
-    const WallContext *contexts[MAX_RENDER_PORTAL_DEPTH];
-    uint8_t clip_start[MAX_RENDER_PORTAL_DEPTH];
-    uint8_t clip_end[MAX_RENDER_PORTAL_DEPTH];
-    uint8_t opening_start[MAX_RENDER_PORTAL_DEPTH];
-    uint8_t opening_end[MAX_RENDER_PORTAL_DEPTH];
+    RayHit hit;
     uint8_t primary_tile;
     uint8_t secondary_tile;
 } RenderScratch;
@@ -531,7 +565,8 @@ static inline __attribute__((always_inline)) void render_benchmark_count_mask(
 GridProjection render_grid_near_projection;
 GridProjection grid_far_projection;
 static GridSegment grid_segments[GRID_SEGMENT_CAPACITY];
-static uint16_t render_wall_scale_offset[WALL_HEIGHT_TABLE_SIZE];
+/* Direct distance-to-profile index: 8 KiB, four exact duplicate entries. */
+static uint8_t render_wall_scale_profile_index[WALL_DISTANCE_TABLE_SIZE];
 static WallContext render_wall_scale_profiles[MAX_WALL_TEXTURE_PROFILES];
 ScreenRow render_screen_rows[GFX_LCD_HEIGHT];
 #define SCREEN_ROW_STORAGE_BYTES sizeof(render_screen_rows)
@@ -555,7 +590,14 @@ uint8_t render_wall_texture_runs
     [WALL_TEXTURE_DESCRIPTOR_COUNT * WALL_TEXTURE_DESCRIPTOR_SIZE + 1u];
 WallColor render_wall_colors
     [WALL_TEXTURE_COUNT][WALL_SHADE_LEVELS][WALL_BASE_COLOR_COUNT];
+/* {next source row, packed palette byte x3}; 2048 exact four-byte records. */
+uint8_t render_wall_prepacked_runs
+    [WALL_PREPACKED_RUN_RECORD_COUNT * WALL_PREPACKED_RUN_RECORD_SIZE];
 uint8_t render_portal_profile_by_u[256];
+PortalTransformPlan render_portal_transform_plans[RENDER_PORTAL_PLAN_COUNT];
+uint8_t render_portal_faces[RENDER_PORTAL_FACE_COUNT];
+static uint16_t render_primary_face = RENDER_PORTAL_FACE_INVALID;
+static uint16_t render_secondary_face = RENDER_PORTAL_FACE_INVALID;
 
 _Static_assert(LOGICAL_COLUMNS * COLUMN_WIDTH == GFX_LCD_WIDTH,
     "Ray columns must cover the complete LCD width");
@@ -597,6 +639,8 @@ _Static_assert(offsetof(GridProjection, height) == 6u,
 _Static_assert(offsetof(GridProjection, screen_y) == 8u,
     "Assembly GridProjection.screen_y offset changed");
 _Static_assert(sizeof(WallColor) == 4u, "WallColor must stay tightly packed");
+_Static_assert(sizeof(render_wall_prepacked_runs) == 8192u,
+    "Prepacked wall-run table must stay exactly 8 KiB");
 _Static_assert(sizeof(ScreenRow) == 4u, "ScreenRow must retain shift-only indexing");
 _Static_assert(sizeof(WallContext) == 8u, "Assembly WallContext layout changed");
 _Static_assert(offsetof(WallContext, start) == 2u,
@@ -606,7 +650,9 @@ _Static_assert(offsetof(WallContext, boundaries) == 4u,
 _Static_assert(offsetof(WallContext, center) == 7u,
     "Assembly WallContext.center offset changed");
 _Static_assert(sizeof(RayHit) == 14u, "Assembly RayHit layout changed");
-_Static_assert(sizeof(RayDDAState) == 55u,
+_Static_assert(sizeof(PortalTransformPlan) == 8u,
+    "Assembly portal transform-plan layout changed");
+_Static_assert(sizeof(RayDDAState) == 58u,
     "Assembly RayDDAState layout changed");
 _Static_assert(offsetof(RayDDAState, origin_y) == 3u,
     "Assembly RayDDAState.origin_y offset changed");
@@ -654,6 +700,8 @@ _Static_assert(offsetof(RayDDAState, portal_id) == 53u,
     "Assembly RayDDAState.portal_id offset changed");
 _Static_assert(offsetof(RayDDAState, portal_has_exit) == 54u,
     "Assembly RayDDAState.portal_has_exit offset changed");
+_Static_assert(offsetof(RayDDAState, portal_plan) == 55u,
+    "Assembly RayDDAState.portal_plan offset changed");
 _Static_assert(sizeof(Portal) == 4u, "Assembly Portal layout changed");
 _Static_assert(offsetof(GameState, primary) == 8u,
     "Assembly GameState.primary offset changed");
@@ -674,7 +722,8 @@ _Static_assert(offsetof(RayHit, portal_kind) == 10u,
 _Static_assert(offsetof(RayHit, wall_position) == 11u,
     "Assembly RayHit.wall_position offset changed");
 _Static_assert(
-    sizeof(GameState) + sizeof(RenderScratch) + sizeof(render_wall_scale_offset) +
+    sizeof(GameState) + sizeof(RenderScratch) +
+        sizeof(render_wall_scale_profile_index) +
         sizeof(render_wall_scale_profiles) +
         sizeof(grid_segments) + SCREEN_ROW_STORAGE_BYTES +
         sizeof(render_direction_y_by_angle) +
@@ -682,7 +731,12 @@ _Static_assert(
         sizeof(render_wall_texture_boundaries) +
         sizeof(render_wall_texture_runs) +
         sizeof(render_wall_colors) +
-        sizeof(render_portal_profile_by_u) + sizeof(render_grid_near_projection) +
+        sizeof(render_wall_prepacked_runs) +
+        sizeof(render_portal_profile_by_u) +
+        sizeof(render_portal_transform_plans) +
+        sizeof(render_portal_faces) +
+        sizeof(render_primary_face) + sizeof(render_secondary_face) +
+        sizeof(render_grid_near_projection) +
         sizeof(grid_far_projection) +
         4096u < 96u * 1024u,
     "Static state plus the reserved CEdev stack exceeds 96 KiB"
@@ -766,6 +820,177 @@ const PortalLink render_builtin_portals[10] = {
     {0, 2, DIR_SOUTH, 3, 0, DIR_EAST},
     {3, 0, DIR_EAST, 0, 2, DIR_SOUTH}
 };
+
+/* Same packed rotation/mirror encoding as the assembly compatibility path. */
+static const uint8_t render_portal_transform_flags[16] = {
+    0x82, 0x00, 0x03, 0x81,
+    0x00, 0x82, 0x81, 0x03,
+    0x01, 0x83, 0x82, 0x00,
+    0x83, 0x01, 0x00, 0x82
+};
+
+static void render_portal_transform_plan_init(
+    PortalTransformPlan *plan,
+    uint8_t entry_direction,
+    uint8_t exit_x,
+    uint8_t exit_y,
+    uint8_t exit_direction
+) {
+    uint8_t *tangent = (uint8_t *)&plan->tangent_base;
+    uint8_t *normal = (uint8_t *)&plan->normal;
+
+    plan->flags = render_portal_transform_flags[
+        (uint8_t)(entry_direction * 4u + exit_direction)
+    ];
+    tangent[0] = 0;
+    tangent[2] = 0;
+
+    if (exit_direction == DIR_NORTH || exit_direction == DIR_SOUTH) {
+        tangent[1] = exit_y;
+        if (exit_direction == DIR_NORTH) {
+            normal[0] = 0xFFu;
+            normal[1] = (uint8_t)(exit_x - 1u);
+            normal[2] = exit_x == 0 ? 0xFFu : 0;
+        } else {
+            normal[0] = 1;
+            normal[1] = (uint8_t)(exit_x + 1u);
+            normal[2] = 0;
+        }
+        plan->tangent_to_x = 0;
+    } else {
+        tangent[1] = exit_x;
+        if (exit_direction == DIR_WEST) {
+            normal[0] = 0xFFu;
+            normal[1] = (uint8_t)(exit_y - 1u);
+            normal[2] = exit_y == 0 ? 0xFFu : 0;
+        } else {
+            normal[0] = 1;
+            normal[1] = (uint8_t)(exit_y + 1u);
+            normal[2] = 0;
+        }
+        plan->tangent_to_x = 1;
+    }
+}
+
+static inline __attribute__((always_inline)) uint16_t render_portal_face_index(
+    uint8_t x,
+    uint8_t y,
+    uint8_t direction
+) {
+    return (uint16_t)(
+        ((uint16_t)direction << 8) | ((uint16_t)y << 4) | x
+    );
+}
+
+static inline __attribute__((always_inline)) uint8_t render_portal_face_value(
+    uint8_t kind,
+    uint8_t portal_id,
+    uint8_t linked
+) {
+    return (uint8_t)(
+        kind | (linked ? RENDER_PORTAL_FACE_LINKED : 0u) |
+        (uint8_t)(portal_id << RENDER_PORTAL_FACE_ID_SHIFT)
+    );
+}
+
+static uint8_t render_builtin_face_value(uint16_t face) {
+    uint8_t portal_id;
+
+    for (portal_id = 0; portal_id < 10u; ++portal_id) {
+        const PortalLink *link = &render_builtin_portals[portal_id];
+
+        if (render_portal_face_index(
+                link->x, link->y, link->direction
+            ) == face) {
+            return render_portal_face_value(
+                PORTAL_BUILTIN, portal_id, 1
+            );
+        }
+    }
+    return 0;
+}
+
+static void render_portal_tables_init_builtin(void) {
+    uint8_t portal_id;
+
+    memset(render_portal_faces, 0, sizeof(render_portal_faces));
+    render_primary_face = RENDER_PORTAL_FACE_INVALID;
+    render_secondary_face = RENDER_PORTAL_FACE_INVALID;
+
+    for (portal_id = 0; portal_id < 10u; ++portal_id) {
+        const PortalLink *link = &render_builtin_portals[portal_id];
+
+        render_portal_transform_plan_init(
+            &render_portal_transform_plans[portal_id],
+            link->direction,
+            link->target_x,
+            link->target_y,
+            link->target_direction
+        );
+        render_portal_faces[render_portal_face_index(
+            link->x, link->y, link->direction
+        )] = render_portal_face_value(PORTAL_BUILTIN, portal_id, 1);
+    }
+}
+
+static void render_portal_tables_prepare_dynamic(
+    const GameState *game
+) {
+    uint16_t primary_face = game->primary.valid ?
+        render_portal_face_index(
+            game->primary.x, game->primary.y, game->primary.direction
+        ) : RENDER_PORTAL_FACE_INVALID;
+    uint16_t secondary_face = game->secondary.valid ?
+        render_portal_face_index(
+            game->secondary.x, game->secondary.y, game->secondary.direction
+        ) : RENDER_PORTAL_FACE_INVALID;
+
+    if (primary_face == render_primary_face &&
+        secondary_face == render_secondary_face) {
+        return;
+    }
+
+    /* Restore any builtin descriptor hidden by an old dynamic face. */
+    if (render_primary_face != RENDER_PORTAL_FACE_INVALID) {
+        render_portal_faces[render_primary_face] =
+            render_builtin_face_value(render_primary_face);
+    }
+    if (render_secondary_face != RENDER_PORTAL_FACE_INVALID) {
+        render_portal_faces[render_secondary_face] =
+            render_builtin_face_value(render_secondary_face);
+    }
+    render_primary_face = primary_face;
+    render_secondary_face = secondary_face;
+
+    /* Secondary is patched first so primary retains the legacy precedence. */
+    if (secondary_face != RENDER_PORTAL_FACE_INVALID) {
+        render_portal_faces[secondary_face] = render_portal_face_value(
+            PORTAL_SECONDARY, 11, game->primary.valid
+        );
+    }
+    if (primary_face != RENDER_PORTAL_FACE_INVALID) {
+        render_portal_faces[primary_face] = render_portal_face_value(
+            PORTAL_PRIMARY, 10, game->secondary.valid
+        );
+    }
+
+    if (game->primary.valid && game->secondary.valid) {
+        render_portal_transform_plan_init(
+            &render_portal_transform_plans[10],
+            game->primary.direction,
+            game->secondary.x,
+            game->secondary.y,
+            game->secondary.direction
+        );
+        render_portal_transform_plan_init(
+            &render_portal_transform_plans[11],
+            game->secondary.direction,
+            game->primary.x,
+            game->primary.y,
+            game->primary.direction
+        );
+    }
+}
 
 static const int16_t direction_y[ANGLE_STEPS] = {
     0, 25, 50, 74, 98, 121, 142, 162,
@@ -1024,6 +1249,7 @@ static inline __attribute__((always_inline)) uint8_t render_portal_find_exit(
 static inline __attribute__((always_inline)) void render_ray_set_game(
     const GameState *game
 ) {
+    render_portal_tables_prepare_dynamic(game);
     render_ray_state.game = game;
     render_ray_state.primary_tile = game->primary.valid ?
         (uint8_t)(map_row_offsets[game->primary.y] + game->primary.x) : 0xFFu;
@@ -1529,16 +1755,14 @@ static void place_portal(GameState *game, uint8_t primary) {
 
 static inline __attribute__((always_inline)) const WallContext *
 wall_context_for_distance(fixed_t distance) {
-    uint24_t table_index = (uint24_t)distance >> WALL_HEIGHT_TABLE_SHIFT;
-    uint16_t profile_offset;
+    uint24_t table_index = (uint24_t)distance;
 
-    if (table_index >= WALL_HEIGHT_TABLE_SIZE) {
-        table_index = WALL_HEIGHT_TABLE_SIZE - 1u;
+    if (table_index >= WALL_DISTANCE_TABLE_SIZE) {
+        table_index = WALL_DISTANCE_TABLE_SIZE - 1u;
     }
-    profile_offset = render_wall_scale_offset[table_index];
-    return (const WallContext *)(
-        (const uint8_t *)render_wall_scale_profiles + profile_offset
-    );
+    return &render_wall_scale_profiles[
+        render_wall_scale_profile_index[table_index]
+    ];
 }
 
 static uint16_t wall_height_for_distance(fixed_t distance) {
@@ -1677,7 +1901,7 @@ static inline __attribute__((always_inline)) void draw_textured_wall_segment(
     uint8_t reuse_setup
 ) {
     (void)reuse_setup;
-    render_asm_draw_wall_segment(
+    render_asm_draw_wall_segment_prepacked(
         ray, x, start, end, full_context
     );
 }
@@ -1718,11 +1942,17 @@ static inline __attribute__((always_inline)) void add_horizontal_grid_segment(
 }
 
 extern void render_asm_add_projected_grid_segment(
-    GridSegment **segment_end,
     fixed_t lateral_near,
     fixed_t lateral_far
 );
-#define add_projected_grid_segment render_asm_add_projected_grid_segment
+static inline __attribute__((always_inline)) void add_projected_grid_segment(
+    GridSegment **segment_end,
+    fixed_t lateral_near,
+    fixed_t lateral_far
+) {
+    (void)segment_end;
+    render_asm_add_projected_grid_segment(lateral_near, lateral_far);
+}
 
 #else
 static int24_t project_grid_x(
@@ -1836,9 +2066,11 @@ static void draw_background_grid(
     fixed_t y_line_step;
     fixed_t y_input_near;
     fixed_t y_input_far;
-    uint8_t near_screen_y = render_grid_near_projection.screen_y;
     GridSegment *segment_end = grid_segments;
     uint8_t line;
+#if !RENDER_ASM_BACKGROUND
+    uint8_t near_screen_y = render_grid_near_projection.screen_y;
+#endif
 
     fixed_scale_init(&inverse_x_scale, inverse_x);
     fixed_scale_init(&inverse_y_scale, inverse_y);
@@ -1923,8 +2155,8 @@ static void draw_background_grid(
         COLOR_CEILING,
         GFX_LCD_WIDTH * 112u
     );
-#endif
     gfx_SetColor(COLOR_FLOOR_NEAR);
+#endif
 
     /* Project each world-space line once; ceiling lines mirror the floor. */
     for (line = 0; line <= MAP_WIDTH; ++line) {
@@ -2042,27 +2274,15 @@ static void draw_background_grid(
         }
     }
 
+#if !RENDER_ASM_BACKGROUND
     gfx_SetColor(COLOR_CEILING_NEAR);
     {
         const GridSegment *segment;
         uint8_t ceiling_near_y = (uint8_t)(GFX_LCD_HEIGHT - near_screen_y);
 
         for (segment = grid_segments; segment != segment_end; ++segment) {
-#if RENDER_ASM_BACKGROUND
-            uint8_t far_y =
-                (uint8_t)(GFX_LCD_HEIGHT - FLOOR_FAR_SCREEN_Y);
-#else
             uint8_t far_y = (uint8_t)(GFX_LCD_HEIGHT - segment->far_y);
-#endif
 
-#if RENDER_ASM_BACKGROUND
-            gfx_Line(
-                segment->far_x,
-                far_y,
-                segment->near_x,
-                ceiling_near_y
-            );
-#else
             if (segment->kind == GRID_HORIZONTAL) {
                 gfx_HorizLine_NoClip(0, far_y, GFX_LCD_WIDTH);
             } else if (segment->kind == GRID_SLANTED_NOCLIP) {
@@ -2080,9 +2300,9 @@ static void draw_background_grid(
                     ceiling_near_y
                 );
             }
-#endif
         }
     }
+#endif
 }
 
 static inline __attribute__((always_inline)) void draw_span(
@@ -2296,7 +2516,9 @@ static void render_column(
     uint8_t count = 0;
     uint8_t clip_start = 0;
     uint8_t clip_end = GFX_LCD_HEIGHT;
-    uint8_t terminal_open = 0;
+    uint8_t draw_clip_start = 0;
+    uint8_t draw_clip_end = GFX_LCD_HEIGHT;
+    RayHit *hit = &render_scratch.hit;
 
     while (count < MAX_RENDER_PORTAL_DEPTH) {
 #if RENDER_ASM_RAYCAST
@@ -2314,11 +2536,6 @@ static void render_column(
         uint8_t next_clip_end;
         fixed_t segment_distance;
         fixed_t projected_distance;
-        RayHit *hit = &render_scratch.layers[count];
-
-        /* Retain the incoming aperture for back-to-front layer compositing. */
-        render_scratch.clip_start[count] = clip_start;
-        render_scratch.clip_end[count] = clip_end;
         RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_DDA);
 #if RENDER_ASM_RAYCAST
         if (count == 0) {
@@ -2440,16 +2657,73 @@ static void render_column(
 #endif
         hit->portal_kind = kind;
         context = wall_context_for_distance(hit->distance);
-        render_scratch.contexts[count] = context;
         if (kind != PORTAL_NONE) {
             portal_opening(hit, context, &opening_start, &opening_end);
-            render_scratch.opening_start[count] = opening_start;
-            render_scratch.opening_end[count] = opening_end;
         }
         ++count;
 
         if (!has_exit) {
+            if (draw_clip_end > draw_clip_start) {
+#if RENDER_BENCHMARK
+                render_benchmark_count_wall(
+                    context,
+                    draw_clip_start,
+                    draw_clip_end
+                );
+#endif
+                RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_WALL_DRAW);
+                draw_wall_clipped(
+                    hit,
+                    context,
+                    x,
+                    draw_clip_start,
+                    draw_clip_end
+                );
+                if (kind != PORTAL_NONE) {
+                    RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_PORTAL_DRAW);
+                    draw_portal_ring(
+                        hit,
+                        context,
+                        x,
+                        draw_clip_start,
+                        draw_clip_end,
+                        opening_start,
+                        opening_end
+                    );
+                    RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_PORTAL_TRACE);
+                }
+            }
             break;
+        }
+
+        /*
+         * Composite the nearest portal first.  Every pixel written here is
+         * opaque in the old back-to-front result, so deeper layers only need
+         * the still-open center of the ring.  The independent visibility
+         * clip below deliberately retains the full geometric aperture for
+         * recursion, loop detection, and the minimum-height decision.
+         */
+        if (draw_clip_end > draw_clip_start) {
+#if RENDER_BENCHMARK
+            render_benchmark_count_mask(
+                context,
+                draw_clip_start,
+                draw_clip_end,
+                opening_start,
+                opening_end
+            );
+#endif
+            RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_PORTAL_DRAW);
+            draw_portal_mask(
+                hit,
+                context,
+                x,
+                draw_clip_start,
+                draw_clip_end,
+                opening_start,
+                opening_end
+            );
+            RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_PORTAL_TRACE);
         }
 
         next_clip_start = opening_start > clip_start ? opening_start : clip_start;
@@ -2458,6 +2732,34 @@ static void render_column(
         /* This portal is behind the current aperture, so its wall is terminal. */
         if (next_clip_end <= next_clip_start) {
             break;
+        }
+
+        {
+            uint8_t thickness = portal_ring_thickness(
+                opening_start,
+                opening_end
+            );
+            uint8_t opening_center_start = (uint8_t)(
+                opening_start + thickness
+            );
+
+            if (opening_end <= opening_center_start) {
+                draw_clip_start = draw_clip_end;
+            } else {
+                uint8_t opening_center_end = (uint8_t)(
+                    opening_end - thickness
+                );
+
+                if (opening_center_start > draw_clip_start) {
+                    draw_clip_start = opening_center_start;
+                }
+                if (opening_center_end < draw_clip_end) {
+                    draw_clip_end = opening_center_end;
+                }
+                if (draw_clip_end <= draw_clip_start) {
+                    draw_clip_start = draw_clip_end;
+                }
+            }
         }
 
         clip_start = next_clip_start;
@@ -2473,7 +2775,6 @@ static void render_column(
             if (clip_height < PORTAL_RECURSE_MIN_HEIGHT ||
                 count >= MAX_RENDER_PORTAL_DEPTH ||
                 (already_visited & visit_mask) != 0) {
-                terminal_open = 1;
                 break;
             }
 
@@ -2524,96 +2825,11 @@ static void render_column(
 
     RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
 
-    {
-        uint8_t layer = (uint8_t)(count - 1);
-        uint8_t layer_clip_start = render_scratch.clip_start[layer];
-        uint8_t layer_clip_end = render_scratch.clip_end[layer];
-
-        if (terminal_open) {
-#if RENDER_BENCHMARK
-            render_benchmark_count_mask(
-                render_scratch.contexts[layer],
-                layer_clip_start,
-                layer_clip_end,
-                render_scratch.opening_start[layer],
-                render_scratch.opening_end[layer]
-            );
-#endif
-            RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_PORTAL_DRAW);
-            draw_portal_mask(
-                &render_scratch.layers[layer],
-                render_scratch.contexts[layer],
-                x,
-                layer_clip_start,
-                layer_clip_end,
-                render_scratch.opening_start[layer],
-                render_scratch.opening_end[layer]
-            );
-            RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
-        } else {
-#if RENDER_BENCHMARK
-            render_benchmark_count_wall(
-                render_scratch.contexts[layer],
-                layer_clip_start,
-                layer_clip_end
-            );
-#endif
-            RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_WALL_DRAW);
-            draw_wall_clipped(
-                &render_scratch.layers[layer],
-                render_scratch.contexts[layer],
-                x,
-                layer_clip_start,
-                layer_clip_end
-            );
-            RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
-            RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_PORTAL_DRAW);
-            draw_portal_ring(
-                &render_scratch.layers[layer],
-                render_scratch.contexts[layer],
-                x,
-                layer_clip_start,
-                layer_clip_end,
-                render_scratch.opening_start[layer],
-                render_scratch.opening_end[layer]
-            );
-            RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
-        }
-    }
-
 #if RENDER_PROFILE
     if (count > render_profile.max_depth) {
         render_profile.max_depth = count;
     }
 #endif
-
-    while (count > 1) {
-        uint8_t layer;
-
-        --count;
-        layer = (uint8_t)(count - 1);
-#if RENDER_BENCHMARK
-        render_benchmark_count_mask(
-            render_scratch.contexts[layer],
-            render_scratch.clip_start[layer],
-            render_scratch.clip_end[layer],
-            render_scratch.opening_start[layer],
-            render_scratch.opening_end[layer]
-        );
-#endif
-        RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_PORTAL_DRAW);
-        draw_portal_mask(
-            &render_scratch.layers[layer],
-            render_scratch.contexts[layer],
-            x,
-            render_scratch.clip_start[layer],
-            render_scratch.clip_end[layer],
-            render_scratch.opening_start[layer],
-            render_scratch.opening_end[layer]
-        );
-        RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
-    }
-
 }
 
 void game_init(GameState *game) {
@@ -2657,6 +2873,8 @@ void game_graphics_init(void) {
             {82, 96, 108}, {104, 119, 128}, {190, 145, 35}, {240, 200, 65}
         }
     };
+
+    render_portal_tables_init_builtin();
 
     /*
      * Preserve C's truncation toward zero exactly.  Within each 1/64-turn
@@ -2752,9 +2970,15 @@ void game_graphics_init(void) {
             previous_height = height;
             ++profile_count;
         }
-        render_wall_scale_offset[index] = (uint16_t)(
-            (profile_count - 1u) * sizeof(WallContext)
-        );
+        {
+            uint8_t profile_index = (uint8_t)(profile_count - 1u);
+            uint24_t distance_index = index << WALL_HEIGHT_TABLE_SHIFT;
+
+            render_wall_scale_profile_index[distance_index] = profile_index;
+            render_wall_scale_profile_index[distance_index + 1u] = profile_index;
+            render_wall_scale_profile_index[distance_index + 2u] = profile_index;
+            render_wall_scale_profile_index[distance_index + 3u] = profile_index;
+        }
     }
 
     grid_projection_init(&render_grid_near_projection, FLOOR_NEAR_DISTANCE);
@@ -2862,6 +3086,38 @@ void game_graphics_init(void) {
                     (uint24_t)palette |
                     ((uint24_t)palette << 8) |
                     ((uint24_t)palette << 16);
+            }
+        }
+    }
+
+    for (material = 0; material < WALL_TEXTURE_COUNT; ++material) {
+        for (shade = 0; shade < WALL_SHADE_LEVELS; ++shade) {
+            for (x = 0; x < WALL_TEXTURE_WIDTH; ++x) {
+                for (y = 0; y < WALL_TEXTURE_HEIGHT; ++y) {
+                    uint16_t descriptor_index = (uint16_t)(
+                        ((uint16_t)material * WALL_TEXTURE_WIDTH *
+                            WALL_TEXTURE_HEIGHT +
+                            (uint16_t)x * WALL_TEXTURE_HEIGHT + y) *
+                        WALL_TEXTURE_DESCRIPTOR_SIZE
+                    );
+                    uint16_t record_index = (uint16_t)(
+                        ((((uint16_t)material * WALL_SHADE_LEVELS + shade) *
+                            WALL_TEXTURE_WIDTH + x) * WALL_TEXTURE_HEIGHT + y) *
+                        WALL_PREPACKED_RUN_RECORD_SIZE
+                    );
+                    uint8_t texel = (uint8_t)(
+                        render_wall_texture_runs[descriptor_index] /
+                        sizeof(WallColor)
+                    );
+                    uint8_t palette =
+                        render_wall_colors[material][shade][texel].palette;
+
+                    render_wall_prepacked_runs[record_index] =
+                        render_wall_texture_runs[descriptor_index + 1u];
+                    render_wall_prepacked_runs[record_index + 1u] = palette;
+                    render_wall_prepacked_runs[record_index + 2u] = palette;
+                    render_wall_prepacked_runs[record_index + 3u] = palette;
+                }
             }
         }
     }
@@ -2992,18 +3248,13 @@ void game_render(const GameState *game) {
     render_profile.near_raw_distance = 0;
     render_profile.near_projected_distance = 0;
 #endif
-    mark = clock();
 #endif
 
-    /* Direct wall writes must not touch a buffer still being scanned out. */
-    RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_WAIT);
-    gfx_Wait();
-    RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
-#if RENDER_PROFILE
-    now = clock();
-    render_profile.wait_ticks = now - mark;
-    mark = now;
-#endif
+    /*
+     * Camera and portal-table setup does not touch the draw buffer.  Do it
+     * while the LCD may still be scanning the previous frame, then block only
+     * immediately before the first background write as recommended by GraphX.
+     */
     direction_for_angle(game->angle, &dir_x, &dir_y);
     plane_x = -render_fov_by_direction[
         (uint16_t)(dir_y + FIXED_ONE)
@@ -3018,6 +3269,7 @@ void game_render(const GameState *game) {
     render_scratch.secondary_tile = game->secondary.valid ?
         (uint8_t)(map_row_offsets[game->secondary.y] + game->secondary.x) : 0xFFu;
 #if RENDER_ASM_RAYCAST
+    render_portal_tables_prepare_dynamic(game);
     render_ray_state.game = game;
     render_ray_state.primary_tile = render_scratch.primary_tile;
     render_ray_state.secondary_tile = render_scratch.secondary_tile;
@@ -3025,6 +3277,15 @@ void game_render(const GameState *game) {
 
 #if RENDER_PROFILE
     mark = clock();
+#endif
+    /* Direct framebuffer writes must not race the previous LCD scan. */
+    RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_WAIT);
+    gfx_Wait();
+    RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
+#if RENDER_PROFILE
+    now = clock();
+    render_profile.wait_ticks = now - mark;
+    mark = now;
 #endif
 
     RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_BACKGROUND);

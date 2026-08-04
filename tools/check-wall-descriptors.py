@@ -5,9 +5,14 @@ from __future__ import annotations
 
 
 MATERIALS = 4
+SHADES = 4
 WIDTH = 16
 HEIGHT = 8
+COLORS = 8
 DESCRIPTOR_SIZE = 2
+PREPACKED_RECORD_SIZE = 4
+COLOR_TEXTURE_BASE = 18
+PALETTE_STRIDE = SHADES * COLORS
 FIXED_ONE = 256
 MAX_POSITIVE_DISTANCE = 0x7FFFFF
 
@@ -77,6 +82,9 @@ def check_distance_shade_tiers() -> None:
 def main() -> None:
     descriptor_count = MATERIALS * WIDTH * HEIGHT
     descriptors = bytearray(descriptor_count * DESCRIPTOR_SIZE + 1)
+    prepacked = bytearray(
+        MATERIALS * SHADES * WIDTH * HEIGHT * PREPACKED_RECORD_SIZE
+    )
     checked = 0
 
     for material in range(MATERIALS):
@@ -126,6 +134,74 @@ def main() -> None:
     assert len(descriptors) == descriptor_count * DESCRIPTOR_SIZE + 1
     assert descriptors[-1] == 0
     print(f"wall descriptors exact: {checked} texel/run entries plus safe tail padding")
+
+    prepacked_checked = 0
+    chain_count = 0
+    for material in range(MATERIALS):
+        for shade in range(SHADES):
+            for x in range(WIDTH):
+                # Assembly starts with H=material*4+shade and L=x<<4,
+                # then doubles HL to form this exact 32-byte column base.
+                assembly_base = (
+                    ((material * SHADES + shade) << 8) | (x << 4)
+                ) << 1
+                c_base = (
+                    ((material * SHADES + shade) * WIDTH + x) * HEIGHT
+                    * PREPACKED_RECORD_SIZE
+                )
+                assert assembly_base == c_base
+
+                for y in range(HEIGHT):
+                    descriptor = (
+                        (material * WIDTH * HEIGHT + x * HEIGHT + y)
+                        * DESCRIPTOR_SIZE
+                    )
+                    value = descriptors[descriptor] // 4
+                    next_y = descriptors[descriptor + 1]
+                    palette = (
+                        COLOR_TEXTURE_BASE + material * PALETTE_STRIDE
+                        + shade * COLORS + value
+                    )
+                    record = c_base + y * PREPACKED_RECORD_SIZE
+                    assert record == assembly_base + (y << 2)
+                    assert 0 <= palette <= 255
+                    prepacked[record] = next_y
+                    prepacked[record + 1 : record + 4] = bytes(
+                        (palette, palette, palette)
+                    )
+                    legacy_packed = palette | (palette << 8) | (palette << 16)
+                    assert int.from_bytes(
+                        prepacked[record + 1 : record + 4], "little"
+                    ) == legacy_packed
+                    prepacked_checked += 1
+
+                source = 0
+                covered: list[int] = []
+                while source < HEIGHT:
+                    record = c_base + (source << 2)
+                    next_source = prepacked[record]
+                    expected = (
+                        COLOR_TEXTURE_BASE + material * PALETTE_STRIDE
+                        + shade * COLORS + texel(material, x, source)
+                    )
+                    assert prepacked[record + 1] == expected
+                    covered.extend([expected] * (next_source - source))
+                    source = next_source
+                assert source == HEIGHT
+                assert covered == [
+                    COLOR_TEXTURE_BASE + material * PALETTE_STRIDE
+                    + shade * COLORS + texel(material, x, y)
+                    for y in range(HEIGHT)
+                ]
+                chain_count += 1
+
+    assert len(prepacked) == 8192
+    assert prepacked_checked == 2048
+    assert chain_count == 256
+    print(
+        "prepacked wall runs exact: 2,048 records / 8,192 bytes; "
+        "256 complete material-shade-column chains"
+    )
     check_distance_shade_tiers()
     print(
         "wall/portal shade tiers exact: "

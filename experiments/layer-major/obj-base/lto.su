@@ -1,0 +1,14 @@
+src/game.c:3074:game_init	0	static
+src/game.c:3083:game_graphics_init	67	static
+src/game.c:1600:grid_projection_init	3	static
+src/game.c:3365:game_update	35	static
+src/game.c:1499:place_portal	38	static
+src/game.c:1420:try_player_portal	23	static
+src/game.c:1391:move_without_portal	15	static
+src/game.c:3425:game_render	80	static
+src/game.c:890:ray_stepper_init	3	static
+src/game.c:949:delta_for_component	0	static
+src/game.c:869:fixed_scale_mul	0	static
+src/game.c:2733:render_column	25	static
+src/main.c:181:main	21	static
+src/main.c:125:render_frame	10	static
