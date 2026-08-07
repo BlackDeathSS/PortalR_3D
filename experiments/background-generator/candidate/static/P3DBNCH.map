@@ -1,0 +1,459 @@
+
+Merging object attributes
+
+
+Discarded input sections
+
+ .comment       0x00000000      0x1bd obj/benchmark/P3DBNCH.o
+ .note.GNU-stack
+                0x00000000        0x0 obj/benchmark/P3DBNCH.o
+ .init.weak_crt
+                0x00000000       0x10 obj/benchmark/P3DBNCH.o
+ .text          0x00000000        0x0 obj/benchmark/crt0.o
+ .data          0x00000000        0x0 obj/benchmark/crt0.o
+ .bss           0x00000000        0x0 obj/benchmark/crt0.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+prgm             0x00d1a87f         0x00400000
+bss              0x00d052c6         0x0000ed12
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+                0x00d1a87f                        LOAD_ADDR = 0xd1a87f
+                0x00d052c6                        BSSHEAP_LOW = 0xd052c6
+                0x00d13fd8                        BSSHEAP_HIGH = 0xd13fd8
+                0x00d1a87e                        STACK_HIGH = 0xd1a87e
+                0x00000001                        __TICE__ = 0x1
+                0x00d1a87f                        . = LOAD_ADDR
+
+.header         0x00d1a87f       0x23
+ *(.header)
+ .header        0x00d1a87f        0x3 obj/benchmark/crt0.o
+ *(.header.icon)
+ .header.icon   0x00d1a882       0x20 obj/benchmark/P3DBNCH.o
+                0x00d1a887                ___description
+
+.init           0x00d1a8a2      0x150
+ *(.init)
+ .init          0x00d1a8a2      0x150 obj/benchmark/crt0.o
+                0x00d1a8a2                __start
+                0x00d1a8ff                __libload_library_FILEIOC
+                0x00d1a909                _ti_Open
+                0x00d1a90d                _ti_Close
+                0x00d1a911                _ti_Write
+                0x00d1a915                _ti_Delete
+                0x00d1a919                _ti_SetArchiveStatus
+                0x00d1a91d                _ti_GetSize
+                0x00d1a921                _ti_Rename
+                0x00d1a925                __libload_library_GRAPHX
+                0x00d1a92e                _gfx_Begin
+                0x00d1a932                _gfx_End
+                0x00d1a936                _gfx_SetColor
+                0x00d1a93a                _gfx_FillScreen
+                0x00d1a93e                _gfx_SetDraw
+                0x00d1a942                _gfx_SwapDraw
+                0x00d1a946                _gfx_PrintUInt
+                0x00d1a94a                _gfx_PrintString
+                0x00d1a94e                _gfx_PrintStringXY
+                0x00d1a952                _gfx_SetTextBGColor
+                0x00d1a956                _gfx_SetTextFGColor
+                0x00d1a95a                _gfx_SetTextTransparentColor
+                0x00d1a95e                _gfx_SetTextScale
+                0x00d1a962                _gfx_Wait
+                0x00d1a9b6                ___exithl
+                0x00d1a9b7                _exit.sp
+
+.text           0x00d1a9f2     0x506e
+ *(.text.unlikely .text.*_unlikely .text.unlikely.*)
+ *(.text.exit .text.exit.*)
+ *(.text.startup .text.startup.*)
+ *(.text.hot .text.hot.*)
+ *(SORT_BY_NAME(.text.sorted.*))
+ *(.text .stub .text.* .gnu.linkonce.t.*)
+ .text          0x00d1a9f2       0x8f obj/benchmark/P3DBNCH.o
+                0x00d1a9f2                __frameset
+                0x00d1aa00                __frameset0
+                0x00d1aa0b                _atomic_load_decreasing_32
+                0x00d1aa30                _atomic_load_increasing_32
+                0x00d1aa55                _clock
+                0x00d1aa60                _memcpy
+ .text._benchmark_run
+                0x00d1aa81      0x847 obj/benchmark/P3DBNCH.o
+                0x00d1aa81                _benchmark_run
+ .text._benchmark_render_progress
+                0x00d1b2c8       0xfa obj/benchmark/P3DBNCH.o
+ .text._benchmark_render_sample
+                0x00d1b3c2      0x34d obj/benchmark/P3DBNCH.o
+ .text._game_render_benchmark_begin
+                0x00d1b70f       0x72 obj/benchmark/P3DBNCH.o
+                0x00d1b70f                _game_render_benchmark_begin
+ .text._game_render_benchmark_end
+                0x00d1b781       0xcf obj/benchmark/P3DBNCH.o
+                0x00d1b781                _game_render_benchmark_end
+ .text._game_render_benchmark_calibrate
+                0x00d1b850      0x24b obj/benchmark/P3DBNCH.o
+                0x00d1b850                _game_render_benchmark_calibrate
+ .text._game_graphics_init
+                0x00d1ba9b      0xba2 obj/benchmark/P3DBNCH.o
+                0x00d1ba9b                _game_graphics_init
+ .text._render_portal_transform_plan_init
+                0x00d1c63d       0x86 obj/benchmark/P3DBNCH.o
+ .text._grid_projection_init
+                0x00d1c6c3       0x70 obj/benchmark/P3DBNCH.o
+ .text._render_portal_tables_prepare_dynamic
+                0x00d1c733      0x1d9 obj/benchmark/P3DBNCH.o
+ .text._render_builtin_face_value
+                0x00d1c90c       0x76 obj/benchmark/P3DBNCH.o
+ .text._game_render
+                0x00d1c982      0x5e4 obj/benchmark/P3DBNCH.o
+                0x00d1c982                _game_render
+ .text._ray_stepper_init
+                0x00d1cf66       0xd3 obj/benchmark/P3DBNCH.o
+ .text._render_column
+                0x00d1d039      0xdba obj/benchmark/P3DBNCH.o
+ .text._main    0x00d1ddf3        0x4 obj/benchmark/P3DBNCH.o
+                0x00d1ddf3                _main
+ .text._render_asm_cast_wall_begin
+                0x00d1ddf7      0x3ee obj/benchmark/P3DBNCH.o
+                0x00d1ddf7                _render_asm_cast_wall_begin
+                0x00d1de77                _render_asm_cast_wall_continue
+ .text._render_asm_add_projected_grid_segment
+                0x00d1e1e5      0x66f obj/benchmark/P3DBNCH.o
+                0x00d1e1e5                _render_asm_add_projected_grid_segment
+                0x00d1e1f6                _render_asm_add_projected_grid_segment_registers
+ .text._render_asm_draw_background_grid
+                0x00d1e854      0x4ef obj/benchmark/P3DBNCH.o
+                0x00d1e854                _render_asm_draw_background_grid
+ .text._render_asm_clear_background
+                0x00d1ed43       0xe7 obj/benchmark/P3DBNCH.o
+                0x00d1ed43                _render_asm_clear_background
+ .text._render_asm_repair_horizon
+                0x00d1ee2a       0x30 obj/benchmark/P3DBNCH.o
+                0x00d1ee2a                _render_asm_repair_horizon
+ .text._render_asm_draw_horizontal_grid_pair
+                0x00d1ee5a      0x14c obj/benchmark/P3DBNCH.o
+                0x00d1ee5a                _render_asm_draw_horizontal_grid_pair
+                0x00d1ee68                _render_asm_draw_horizontal_grid_pair_register
+ .text._render_asm_transform_ray
+                0x00d1efa6      0x2af obj/benchmark/P3DBNCH.o
+                0x00d1efa6                _render_asm_transform_ray
+                0x00d1efb6                _render_asm_transform_ray_state
+ .text._render_asm_portal_opening
+                0x00d1f255       0x97 obj/benchmark/P3DBNCH.o
+                0x00d1f255                _render_asm_portal_opening
+ .text._render_asm_draw_wall_segment
+                0x00d1f2ec      0x22e obj/benchmark/P3DBNCH.o
+                0x00d1f2ec                _render_asm_draw_wall_segment
+ .text._render_asm_draw_wall_segment_registers
+                0x00d1f51a      0x1a1 obj/benchmark/P3DBNCH.o
+                0x00d1f51a                _render_asm_draw_wall_segment_registers
+ .text._render_asm_draw_solid_segment
+                0x00d1f6bb       0x7b obj/benchmark/P3DBNCH.o
+                0x00d1f6bb                _render_asm_draw_solid_segment
+ .text._render_asm_draw_portal_mask
+                0x00d1f736      0x32a obj/benchmark/P3DBNCH.o
+                0x00d1f736                _render_asm_draw_portal_mask
+ *(.gnu.warning)
+
+.rodata         0x00d1fa60      0x8d0
+ *(.rodata .rodata.* .gnu.linkonce.r.*)
+ .rodata._benchmark_scenes
+                0x00d1fa60       0xc0 obj/benchmark/P3DBNCH.o
+ .rodata._.str  0x00d1fb20        0xe obj/benchmark/P3DBNCH.o
+ .rodata._.str.1
+                0x00d1fb2e       0x10 obj/benchmark/P3DBNCH.o
+ .rodata._.str.2
+                0x00d1fb3e        0xf obj/benchmark/P3DBNCH.o
+ .rodata._.str.3
+                0x00d1fb4d       0x12 obj/benchmark/P3DBNCH.o
+ .rodata._.str.4
+                0x00d1fb5f        0x6 obj/benchmark/P3DBNCH.o
+ .rodata._.str.5
+                0x00d1fb65        0x2 obj/benchmark/P3DBNCH.o
+ .rodata._.str.6
+                0x00d1fb67       0x16 obj/benchmark/P3DBNCH.o
+ .rodata._.str.7
+                0x00d1fb7d        0x8 obj/benchmark/P3DBNCH.o
+ .rodata._.str.8
+                0x00d1fb85        0x7 obj/benchmark/P3DBNCH.o
+ .rodata._.str.9
+                0x00d1fb8c        0x2 obj/benchmark/P3DBNCH.o
+ .rodata._.str.10
+                0x00d1fb8e        0x7 obj/benchmark/P3DBNCH.o
+ .rodata._.str.11
+                0x00d1fb95        0x3 obj/benchmark/P3DBNCH.o
+ .rodata._.str.12
+                0x00d1fb98       0x13 obj/benchmark/P3DBNCH.o
+ .rodata._.str.13
+                0x00d1fbab       0x11 obj/benchmark/P3DBNCH.o
+ .rodata._.str.14
+                0x00d1fbbc       0x10 obj/benchmark/P3DBNCH.o
+ .rodata._.str.15
+                0x00d1fbcc        0xa obj/benchmark/P3DBNCH.o
+ .rodata._.str.16
+                0x00d1fbd6        0xf obj/benchmark/P3DBNCH.o
+ .rodata._.str.17
+                0x00d1fbe5       0x10 obj/benchmark/P3DBNCH.o
+ .rodata._.str.18
+                0x00d1fbf5        0xd obj/benchmark/P3DBNCH.o
+ .rodata._.str.19
+                0x00d1fc02       0x10 obj/benchmark/P3DBNCH.o
+ .rodata._.str.20
+                0x00d1fc12        0xf obj/benchmark/P3DBNCH.o
+ .rodata._.str.21
+                0x00d1fc21        0xf obj/benchmark/P3DBNCH.o
+ .rodata._.str.22
+                0x00d1fc30       0x13 obj/benchmark/P3DBNCH.o
+ .rodata._.str.23
+                0x00d1fc43        0xe obj/benchmark/P3DBNCH.o
+ .rodata._benchmark_put_hex32.digits
+                0x00d1fc51       0x11 obj/benchmark/P3DBNCH.o
+ .rodata._render_wall_map
+                0x00d1fc62      0x100 obj/benchmark/P3DBNCH.o
+                0x00d1fc62                _render_wall_map
+ .rodata._render_builtin_portal_by_tile
+                0x00d1fd62      0x100 obj/benchmark/P3DBNCH.o
+                0x00d1fd62                _render_builtin_portal_by_tile
+ .rodata._render_reciprocal_delta
+                0x00d1fe62      0x354 obj/benchmark/P3DBNCH.o
+                0x00d1fe62                _render_reciprocal_delta
+ .rodata._render_builtin_portals
+                0x00d201b6       0x3c obj/benchmark/P3DBNCH.o
+                0x00d201b6                _render_builtin_portals
+ .rodata._game_graphics_init.shade_offsets
+                0x00d201f2        0x4 obj/benchmark/P3DBNCH.o
+ .rodata._game_graphics_init.wall_palette_rgb
+                0x00d201f6       0x60 obj/benchmark/P3DBNCH.o
+ .rodata._direction_y
+                0x00d20256       0x80 obj/benchmark/P3DBNCH.o
+ .rodata._map_row_offsets
+                0x00d202d6       0x10 obj/benchmark/P3DBNCH.o
+ .rodata._render_portal_transform_flags
+                0x00d202e6       0x10 obj/benchmark/P3DBNCH.o
+ .rodata._portal_visit_bits
+                0x00d202f6        0x8 obj/benchmark/P3DBNCH.o
+ .rodata.render_portal_rotation
+                0x00d202fe       0x10 obj/benchmark/P3DBNCH.o
+ .rodata.libload
+                0x00d2030e       0x22 obj/benchmark/crt0.o
+
+.init_array     0x00d20330        0x0
+                [!provide]                        PROVIDE (__init_array_start = .)
+ *(.preinit_array)
+ *(SORT_BY_INIT_PRIORITY(.init_array.*))
+ *(.init_array)
+                [!provide]                        PROVIDE (__init_array_end = .)
+
+.fini_array     0x00d20330        0x0
+                [!provide]                        PROVIDE (__fini_array_start = .)
+ *(SORT_BY_INIT_PRIORITY(.fini_array.*))
+ *(.fini_array)
+                [!provide]                        PROVIDE (__fini_array_end = .)
+                0x00d20330                        ___data_low = .
+
+.data           0x00d20330        0x4
+ *(.data .data.* .gnu.linkonce.d.*)
+ .data._render_primary_face
+                0x00d20330        0x2 obj/benchmark/P3DBNCH.o
+ .data._render_secondary_face
+                0x00d20332        0x2 obj/benchmark/P3DBNCH.o
+ *(.data1)
+                0x00d20334                        ___runprgm_reloc_start = .
+ *(.runprgm.reloc)
+                0x00d20334                        ___runprgm_reloc_end = .
+                0x00d20334                        ___data_high = .
+                0x00000004                        ___data_len = (___data_high - ___data_low)
+                0x00d052c6                        . = BSSHEAP_LOW
+                0x00d052c6                        ___bss_low = .
+
+.bss            0x00d052c6     0xdd37
+ *(.dynbss)
+ *(.bss .bss.* .gnu.linkonce.b.*)
+ .bss._benchmark_report
+                0x00d052c6     0x17b0 obj/benchmark/P3DBNCH.o
+ .bss._benchmark_game
+                0x00d06a76       0x12 obj/benchmark/P3DBNCH.o
+ .bss._render_benchmark_active
+                0x00d06a88        0x1 obj/benchmark/P3DBNCH.o
+ .bss._render_benchmark_last
+                0x00d06a89        0x4 obj/benchmark/P3DBNCH.o
+ .bss._render_benchmark_category
+                0x00d06a8d        0x1 obj/benchmark/P3DBNCH.o
+ .bss._render_benchmark
+                0x00d06a8e       0x42 obj/benchmark/P3DBNCH.o
+ .bss._render_direction_y_by_angle
+                0x00d06ad0     0x8000 obj/benchmark/P3DBNCH.o
+ .bss._render_fov_by_direction
+                0x00d0ead0      0x402 obj/benchmark/P3DBNCH.o
+ .bss._render_screen_rows
+                0x00d0eed2      0x3c0 obj/benchmark/P3DBNCH.o
+                0x00d0eed2                _render_screen_rows
+ .bss._render_wall_scale_profiles
+                0x00d0f292      0x800 obj/benchmark/P3DBNCH.o
+                0x00d0f292                _render_wall_scale_profiles
+ .bss._render_wall_texture_boundaries
+                0x00d0fa92      0x900 obj/benchmark/P3DBNCH.o
+                0x00d0fa92                _render_wall_texture_boundaries
+ .bss._render_wall_scale_profile_index
+                0x00d10392     0x2000 obj/benchmark/P3DBNCH.o
+                0x00d10392                _render_wall_scale_profile_index
+ .bss._render_grid_near_projection
+                0x00d12392        0xa obj/benchmark/P3DBNCH.o
+                0x00d12392                _render_grid_near_projection
+ .bss._grid_far_projection
+                0x00d1239c        0xa obj/benchmark/P3DBNCH.o
+                0x00d1239c                _grid_far_projection
+ .bss._render_portal_profile_by_u
+                0x00d123a6      0x100 obj/benchmark/P3DBNCH.o
+                0x00d123a6                _render_portal_profile_by_u
+ .bss._render_wall_texture_runs
+                0x00d124a6      0x401 obj/benchmark/P3DBNCH.o
+                0x00d124a6                _render_wall_texture_runs
+ .bss._render_wall_colors
+                0x00d128a7      0x200 obj/benchmark/P3DBNCH.o
+                0x00d128a7                _render_wall_colors
+ *fill*         0x00d12aa7        0x1 
+ .bss._render_profile
+                0x00d12aa8       0x10 obj/benchmark/P3DBNCH.o
+ .bss._render_scratch
+                0x00d12ab8       0x10 obj/benchmark/P3DBNCH.o
+ .bss._render_portal_transform_plans
+                0x00d12ac8       0x60 obj/benchmark/P3DBNCH.o
+                0x00d12ac8                _render_portal_transform_plans
+ .bss._render_portal_faces
+                0x00d12b28      0x400 obj/benchmark/P3DBNCH.o
+                0x00d12b28                _render_portal_faces
+ .bss.render_asm_scratch
+                0x00d12f28       0xd5 obj/benchmark/P3DBNCH.o
+                0x00d12f28                _render_ray_state
+ *(COMMON)
+                0x00d12ffd                        ___bss_high = .
+                0x0000dd37                        ___bss_len = (___bss_high - ___bss_low)
+                0x00000001                        ASSERT ((. <= BSSHEAP_HIGH), Error: BSS exceed BSSHEAP_HIGH limit)
+                0x00d12ffd                        ___heap_low = .
+                0x00d13fd8                        . = BSSHEAP_HIGH
+                0x00d13fd8                        ___heap_high = .
+
+.runprgm
+ *(.runprgm.reloc)
+
+.debug_info
+ *(.debug_info .debug_info.*)
+
+.debug_abbrev
+ *(.debug_abbrev .debug_abbrev.*)
+
+.debug_line
+ *(.debug_line .debug_line.*)
+
+.debug_line_str
+ *(.debug_line_str .debug_line_str.*)
+
+.debug_str
+ *(.debug_str .debug_str.*)
+
+.debug_str_offsets
+ *(.debug_str_offsets .debug_str_offsets.*)
+
+.debug_addr
+ *(.debug_addr .debug_addr.*)
+
+.debug_aranges
+ *(.debug_aranges .debug_aranges.*)
+
+.debug_ranges
+ *(.debug_ranges .debug_ranges.*)
+
+.debug_rnglists
+ *(.debug_rnglists .debug_rnglists.*)
+
+.debug_loc
+ *(.debug_loc .debug_loc.*)
+
+.debug_loclists
+ *(.debug_loclists .debug_loclists.*)
+
+.debug_frame
+ *(.debug_frame .debug_frame.*)
+
+.debug_macro
+ *(.debug_macro .debug_macro.*)
+
+.debug_macinfo
+ *(.debug_macinfo .debug_macinfo.*)
+
+.debug_names
+ *(.debug_names .debug_names.*)
+
+.debug_pubnames
+ *(.debug_pubnames .debug_pubnames.*)
+
+.debug_pubtypes
+ *(.debug_pubtypes .debug_pubtypes.*)
+
+.debug_types
+ *(.debug_types .debug_types.*)
+
+.debug_sup
+ *(.debug_sup .debug_sup.*)
+
+.debug_cu_index
+ *(.debug_cu_index .debug_cu_index.*)
+
+.debug_tu_index
+ *(.debug_tu_index .debug_tu_index.*)
+
+.gdb_index
+ *(.gdb_index)
+
+.debug_gdb_scripts
+ *(.debug_gdb_scripts)
+
+.debug_abbrev.dwo
+ *(.debug_abbrev.dwo .debug_abbrev.dwo.*)
+
+.debug_info.dwo
+ *(.debug_info.dwo .debug_info.dwo.*)
+
+.debug_line.dwo
+ *(.debug_line.dwo .debug_line.dwo.*)
+
+.debug_loclists.dwo
+ *(.debug_loclists.dwo .debug_loclists.dwo.*)
+
+.debug_macro.dwo
+ *(.debug_macro.dwo .debug_macro.dwo.*)
+
+.debug_rnglists.dwo
+ *(.debug_rnglists.dwo .debug_rnglists.dwo.*)
+
+.debug_str.dwo
+ *(.debug_str.dwo .debug_str.dwo.*)
+
+.debug_str_offsets.dwo
+ *(.debug_str_offsets.dwo .debug_str_offsets.dwo.*)
+
+.eh_frame
+ *(.eh_frame)
+
+.eh_frame_hdr
+ *(.eh_frame_hdr)
+
+/DISCARD/
+ *(.comment)
+ *(.note*)
+                [!provide]                        PROVIDE (___runprgm_reloc_len = (___runprgm_reloc_end - ___runprgm_reloc_start))
+LOAD obj/benchmark/P3DBNCH.o
+LOAD obj/benchmark/crt0.o
+START GROUP
+LOAD C:/CEdev/lib/libc/allocator_standard.a
+LOAD C:/CEdev/lib/crt/libcrt_os.a
+LOAD C:/CEdev/lib/ce/libce.a
+LOAD C:/CEdev/lib/softfloat/libsoftfloat.a
+LOAD C:/CEdev/lib/libc/libc_os.a
+LOAD C:/CEdev/lib/libcxx/libcxx.a
+END GROUP
+OUTPUT(bin/P3DBNCH.obj elf32-z80)

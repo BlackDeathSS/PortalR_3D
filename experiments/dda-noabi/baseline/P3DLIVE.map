@@ -1,0 +1,483 @@
+
+Merging object attributes
+
+
+Discarded input sections
+
+ .comment       0x00000000      0x1bd obj/live-benchmark/P3DLIVE.o
+ .note.GNU-stack
+                0x00000000        0x0 obj/live-benchmark/P3DLIVE.o
+ .init.weak_crt
+                0x00000000       0x10 obj/live-benchmark/P3DLIVE.o
+ .text          0x00000000        0x0 obj/live-benchmark/crt0.o
+ .data          0x00000000        0x0 obj/live-benchmark/crt0.o
+ .bss           0x00000000        0x0 obj/live-benchmark/crt0.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+prgm             0x00d1a87f         0x00400000
+bss              0x00d052c6         0x0000ed12
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+                0x00d1a87f                        LOAD_ADDR = 0xd1a87f
+                0x00d052c6                        BSSHEAP_LOW = 0xd052c6
+                0x00d13fd8                        BSSHEAP_HIGH = 0xd13fd8
+                0x00d1a87e                        STACK_HIGH = 0xd1a87e
+                0x00000001                        __TICE__ = 0x1
+                0x00d1a87f                        . = LOAD_ADDR
+
+.header         0x00d1a87f       0x27
+ *(.header)
+ .header        0x00d1a87f        0x3 obj/live-benchmark/crt0.o
+ *(.header.icon)
+ .header.icon   0x00d1a882       0x24 obj/live-benchmark/P3DLIVE.o
+                0x00d1a887                ___description
+
+.init           0x00d1a8a6      0x134
+ *(.init)
+ .init          0x00d1a8a6      0x134 obj/live-benchmark/crt0.o
+                0x00d1a8a6                __start
+                0x00d1a903                __libload_library_FILEIOC
+                0x00d1a90d                _ti_Open
+                0x00d1a911                _ti_Close
+                0x00d1a915                _ti_Delete
+                0x00d1a919                _ti_Resize
+                0x00d1a91d                _ti_SetArchiveStatus
+                0x00d1a921                _ti_GetDataPtr
+                0x00d1a925                _ti_Rename
+                0x00d1a929                __libload_library_GRAPHX
+                0x00d1a932                _gfx_Begin
+                0x00d1a936                _gfx_End
+                0x00d1a93a                _gfx_SetColor
+                0x00d1a93e                _gfx_SetDraw
+                0x00d1a942                _gfx_SwapDraw
+                0x00d1a946                _gfx_Line
+                0x00d1a94a                _gfx_Wait
+                0x00d1a99e                ___exithl
+                0x00d1a99f                _exit.sp
+
+.text           0x00d1a9da     0x6f5d
+ *(.text.unlikely .text.*_unlikely .text.unlikely.*)
+ *(.text.exit .text.exit.*)
+ *(.text.startup .text.startup.*)
+ *(.text.hot .text.hot.*)
+ *(SORT_BY_NAME(.text.sorted.*))
+ *(.text .stub .text.* .gnu.linkonce.t.*)
+ .text          0x00d1a9da       0x8f obj/live-benchmark/P3DLIVE.o
+                0x00d1a9da                __frameset
+                0x00d1a9e8                __frameset0
+                0x00d1a9f3                _atomic_load_decreasing_32
+                0x00d1aa18                _atomic_load_increasing_32
+                0x00d1aa3d                _clock
+                0x00d1aa48                _memcpy
+ .text._game_render_benchmark_begin
+                0x00d1aa69       0x72 obj/live-benchmark/P3DLIVE.o
+                0x00d1aa69                _game_render_benchmark_begin
+ .text._game_render_benchmark_end
+                0x00d1aadb       0xcf obj/live-benchmark/P3DLIVE.o
+                0x00d1aadb                _game_render_benchmark_end
+ .text._game_render_benchmark_calibrate
+                0x00d1abaa      0x24b obj/live-benchmark/P3DLIVE.o
+                0x00d1abaa                _game_render_benchmark_calibrate
+ .text._game_graphics_init
+                0x00d1adf5      0xac9 obj/live-benchmark/P3DLIVE.o
+                0x00d1adf5                _game_graphics_init
+ .text._grid_projection_init
+                0x00d1b8be       0x70 obj/live-benchmark/P3DLIVE.o
+ .text._game_update
+                0x00d1b92e      0x31d obj/live-benchmark/P3DLIVE.o
+                0x00d1b92e                _game_update
+ .text._place_portal
+                0x00d1bc4b      0x1a2 obj/live-benchmark/P3DLIVE.o
+ .text._try_player_portal
+                0x00d1bded      0x40a obj/live-benchmark/P3DLIVE.o
+ .text._move_without_portal
+                0x00d1c1f7      0x205 obj/live-benchmark/P3DLIVE.o
+ .text._game_render
+                0x00d1c3fc      0xc36 obj/live-benchmark/P3DLIVE.o
+                0x00d1c3fc                _game_render
+ .text._ray_stepper_init
+                0x00d1d032       0xd3 obj/live-benchmark/P3DLIVE.o
+ .text._delta_for_component
+                0x00d1d105       0x5a obj/live-benchmark/P3DLIVE.o
+ .text._fixed_scale_mul
+                0x00d1d15f       0x3a obj/live-benchmark/P3DLIVE.o
+ .text._render_column
+                0x00d1d199      0xdba obj/live-benchmark/P3DLIVE.o
+ .text._live_benchmark_run
+                0x00d1df53     0x1f49 obj/live-benchmark/P3DLIVE.o
+                0x00d1df53                _live_benchmark_run
+ .text._live_show_failure
+                0x00d1fe9c       0x6c obj/live-benchmark/P3DLIVE.o
+ .text._live_controller_next
+                0x00d1ff08       0xa7 obj/live-benchmark/P3DLIVE.o
+ .text._live_crossed_portal
+                0x00d1ffaf       0x57 obj/live-benchmark/P3DLIVE.o
+ .text._live_section_ends
+                0x00d20006       0x7e obj/live-benchmark/P3DLIVE.o
+ .text._live_game_hash
+                0x00d20084       0x80 obj/live-benchmark/P3DLIVE.o
+ .text._live_hash_bytes
+                0x00d20104       0x55 obj/live-benchmark/P3DLIVE.o
+ .text._main    0x00d20159        0x4 obj/live-benchmark/P3DLIVE.o
+                0x00d20159                _main
+ .text._render_asm_cast_wall_begin
+                0x00d2015d      0x486 obj/live-benchmark/P3DLIVE.o
+                0x00d2015d                _render_asm_cast_wall_begin
+                0x00d201dd                _render_asm_cast_wall_continue
+ .text._render_asm_add_projected_grid_segment
+                0x00d205e3      0x654 obj/live-benchmark/P3DLIVE.o
+                0x00d205e3                _render_asm_add_projected_grid_segment
+ .text._render_asm_clear_background
+                0x00d20c37       0xe7 obj/live-benchmark/P3DLIVE.o
+                0x00d20c37                _render_asm_clear_background
+ .text._render_asm_repair_horizon
+                0x00d20d1e       0x30 obj/live-benchmark/P3DLIVE.o
+                0x00d20d1e                _render_asm_repair_horizon
+ .text._render_asm_draw_horizontal_grid_pair
+                0x00d20d4e      0x147 obj/live-benchmark/P3DLIVE.o
+                0x00d20d4e                _render_asm_draw_horizontal_grid_pair
+ .text._render_asm_find_portal
+                0x00d20e95       0xf9 obj/live-benchmark/P3DLIVE.o
+                0x00d20e95                _render_asm_find_portal
+ .text._render_asm_transform_ray
+                0x00d20f8e      0x19e obj/live-benchmark/P3DLIVE.o
+                0x00d20f8e                _render_asm_transform_ray
+                0x00d20f9e                _render_asm_transform_ray_state
+ .text._render_asm_portal_opening
+                0x00d2112c       0x97 obj/live-benchmark/P3DLIVE.o
+                0x00d2112c                _render_asm_portal_opening
+ .text._render_asm_draw_wall_segment
+                0x00d211c3      0x22e obj/live-benchmark/P3DLIVE.o
+                0x00d211c3                _render_asm_draw_wall_segment
+ .text._render_asm_draw_wall_segment_registers
+                0x00d213f1      0x1a1 obj/live-benchmark/P3DLIVE.o
+                0x00d213f1                _render_asm_draw_wall_segment_registers
+ .text._render_asm_draw_solid_segment
+                0x00d21592       0x7b obj/live-benchmark/P3DLIVE.o
+                0x00d21592                _render_asm_draw_solid_segment
+ .text._render_asm_draw_portal_mask
+                0x00d2160d      0x32a obj/live-benchmark/P3DLIVE.o
+                0x00d2160d                _render_asm_draw_portal_mask
+ *(.gnu.warning)
+
+.rodata         0x00d21938      0x96a
+ *(.rodata .rodata.* .gnu.linkonce.r.*)
+ .rodata._try_player_portal
+                0x00d21938       0x18 obj/live-benchmark/P3DLIVE.o
+ .rodata._render_wall_map
+                0x00d21950      0x100 obj/live-benchmark/P3DLIVE.o
+                0x00d21950                _render_wall_map
+ .rodata._render_builtin_portal_by_tile
+                0x00d21a50      0x100 obj/live-benchmark/P3DLIVE.o
+                0x00d21a50                _render_builtin_portal_by_tile
+ .rodata._render_reciprocal_delta
+                0x00d21b50      0x354 obj/live-benchmark/P3DLIVE.o
+                0x00d21b50                _render_reciprocal_delta
+ .rodata._render_builtin_portals
+                0x00d21ea4       0x3c obj/live-benchmark/P3DLIVE.o
+                0x00d21ea4                _render_builtin_portals
+ .rodata._game_graphics_init.shade_offsets
+                0x00d21ee0        0x4 obj/live-benchmark/P3DLIVE.o
+ .rodata._game_graphics_init.wall_palette_rgb
+                0x00d21ee4       0x60 obj/live-benchmark/P3DLIVE.o
+ .rodata._direction_y
+                0x00d21f44       0x80 obj/live-benchmark/P3DLIVE.o
+ .rodata._map_row_offsets
+                0x00d21fc4       0x10 obj/live-benchmark/P3DLIVE.o
+ .rodata._portal_visit_bits
+                0x00d21fd4        0x8 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str  0x00d21fdc       0x15 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.1
+                0x00d21ff1       0x15 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.2
+                0x00d22006        0x8 obj/live-benchmark/P3DLIVE.o
+ .rodata._live_route
+                0x00d2200e       0x7e obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.3
+                0x00d2208c       0x16 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.4
+                0x00d220a2        0xe obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.5
+                0x00d220b0        0x2 obj/live-benchmark/P3DLIVE.o
+ .rodata._live_sections
+                0x00d220b2       0x48 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.6
+                0x00d220fa        0xb obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.7
+                0x00d22105        0xc obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.8
+                0x00d22111        0xb obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.9
+                0x00d2211c        0xb obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.10
+                0x00d22127        0x9 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.11
+                0x00d22130        0xb obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.12
+                0x00d2213b        0x7 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.13
+                0x00d22142        0xb obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.14
+                0x00d2214d        0xc obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.15
+                0x00d22159        0x9 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.16
+                0x00d22162        0xe obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.17
+                0x00d22170        0x9 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.18
+                0x00d22179        0xb obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.19
+                0x00d22184        0x8 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.20
+                0x00d2218c        0xc obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.21
+                0x00d22198        0x9 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.22
+                0x00d221a1        0xe obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.23
+                0x00d221af        0xa obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.24
+                0x00d221b9        0x8 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.25
+                0x00d221c1        0x8 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.26
+                0x00d221c9        0x3 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.27
+                0x00d221cc       0x14 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.28
+                0x00d221e0       0x11 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.29
+                0x00d221f1       0x14 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.30
+                0x00d22205       0x13 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.31
+                0x00d22218       0x10 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.32
+                0x00d22228        0xa obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.33
+                0x00d22232       0x10 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.34
+                0x00d22242       0x10 obj/live-benchmark/P3DLIVE.o
+ .rodata._.str.35
+                0x00d22252        0xd obj/live-benchmark/P3DLIVE.o
+ .rodata._live_put_hex32.digits
+                0x00d2225f       0x11 obj/live-benchmark/P3DLIVE.o
+ .rodata.render_portal_rotation
+                0x00d22270       0x10 obj/live-benchmark/P3DLIVE.o
+ .rodata.libload
+                0x00d22280       0x22 obj/live-benchmark/crt0.o
+
+.init_array     0x00d222a2        0x0
+                [!provide]                        PROVIDE (__init_array_start = .)
+ *(.preinit_array)
+ *(SORT_BY_INIT_PRIORITY(.init_array.*))
+ *(.init_array)
+                [!provide]                        PROVIDE (__init_array_end = .)
+
+.fini_array     0x00d222a2        0x0
+                [!provide]                        PROVIDE (__fini_array_start = .)
+ *(SORT_BY_INIT_PRIORITY(.fini_array.*))
+ *(.fini_array)
+                [!provide]                        PROVIDE (__fini_array_end = .)
+                0x00d222a2                        ___data_low = .
+
+.data           0x00d222a2        0x0
+ *(.data .data.* .gnu.linkonce.d.*)
+ *(.data1)
+                0x00d222a2                        ___runprgm_reloc_start = .
+ *(.runprgm.reloc)
+                0x00d222a2                        ___runprgm_reloc_end = .
+                0x00d222a2                        ___data_high = .
+                0x00000000                        ___data_len = (___data_high - ___data_low)
+                0x00d052c6                        . = BSSHEAP_LOW
+                0x00d052c6                        ___bss_low = .
+
+.bss            0x00d052c6     0xc150
+ *(.dynbss)
+ *(.bss .bss.* .gnu.linkonce.b.*)
+ .bss._render_benchmark_active
+                0x00d052c6        0x1 obj/live-benchmark/P3DLIVE.o
+ .bss._render_benchmark_last
+                0x00d052c7        0x4 obj/live-benchmark/P3DLIVE.o
+ .bss._render_benchmark_category
+                0x00d052cb        0x1 obj/live-benchmark/P3DLIVE.o
+ .bss._render_benchmark
+                0x00d052cc       0x42 obj/live-benchmark/P3DLIVE.o
+ .bss._render_direction_y_by_angle
+                0x00d0530e     0x8000 obj/live-benchmark/P3DLIVE.o
+ .bss._render_fov_by_direction
+                0x00d0d30e      0x402 obj/live-benchmark/P3DLIVE.o
+ .bss._render_screen_rows
+                0x00d0d710      0x3c0 obj/live-benchmark/P3DLIVE.o
+                0x00d0d710                _render_screen_rows
+ .bss._render_wall_scale_profiles
+                0x00d0dad0      0x800 obj/live-benchmark/P3DLIVE.o
+ .bss._render_wall_texture_boundaries
+                0x00d0e2d0      0x900 obj/live-benchmark/P3DLIVE.o
+                0x00d0e2d0                _render_wall_texture_boundaries
+ .bss._render_wall_scale_profile_index
+                0x00d0ebd0     0x2000 obj/live-benchmark/P3DLIVE.o
+ .bss._render_grid_near_projection
+                0x00d10bd0        0xa obj/live-benchmark/P3DLIVE.o
+                0x00d10bd0                _render_grid_near_projection
+ .bss._grid_far_projection
+                0x00d10bda        0xa obj/live-benchmark/P3DLIVE.o
+                0x00d10bda                _grid_far_projection
+ .bss._render_portal_profile_by_u
+                0x00d10be4      0x100 obj/live-benchmark/P3DLIVE.o
+                0x00d10be4                _render_portal_profile_by_u
+ .bss._render_wall_texture_runs
+                0x00d10ce4      0x401 obj/live-benchmark/P3DLIVE.o
+                0x00d10ce4                _render_wall_texture_runs
+ .bss._render_wall_colors
+                0x00d110e5      0x200 obj/live-benchmark/P3DLIVE.o
+                0x00d110e5                _render_wall_colors
+ *fill*         0x00d112e5        0x1 
+ .bss._render_profile
+                0x00d112e6       0x10 obj/live-benchmark/P3DLIVE.o
+ .bss._render_scratch
+                0x00d112f6       0x10 obj/live-benchmark/P3DLIVE.o
+ .bss._grid_segments
+                0x00d11306       0x80 obj/live-benchmark/P3DLIVE.o
+ .bss._live_report_handle
+                0x00d11386        0x1 obj/live-benchmark/P3DLIVE.o
+ .bss._live_report
+                0x00d11387        0x3 obj/live-benchmark/P3DLIVE.o
+ .bss._live_game
+                0x00d1138a       0x12 obj/live-benchmark/P3DLIVE.o
+ .bss.render_asm_scratch
+                0x00d1139c       0x7a obj/live-benchmark/P3DLIVE.o
+                0x00d1139c                _render_ray_state
+ *(COMMON)
+                0x00d11416                        ___bss_high = .
+                0x0000c150                        ___bss_len = (___bss_high - ___bss_low)
+                0x00000001                        ASSERT ((. <= BSSHEAP_HIGH), Error: BSS exceed BSSHEAP_HIGH limit)
+                0x00d11416                        ___heap_low = .
+                0x00d13fd8                        . = BSSHEAP_HIGH
+                0x00d13fd8                        ___heap_high = .
+
+.runprgm
+ *(.runprgm.reloc)
+
+.debug_info
+ *(.debug_info .debug_info.*)
+
+.debug_abbrev
+ *(.debug_abbrev .debug_abbrev.*)
+
+.debug_line
+ *(.debug_line .debug_line.*)
+
+.debug_line_str
+ *(.debug_line_str .debug_line_str.*)
+
+.debug_str
+ *(.debug_str .debug_str.*)
+
+.debug_str_offsets
+ *(.debug_str_offsets .debug_str_offsets.*)
+
+.debug_addr
+ *(.debug_addr .debug_addr.*)
+
+.debug_aranges
+ *(.debug_aranges .debug_aranges.*)
+
+.debug_ranges
+ *(.debug_ranges .debug_ranges.*)
+
+.debug_rnglists
+ *(.debug_rnglists .debug_rnglists.*)
+
+.debug_loc
+ *(.debug_loc .debug_loc.*)
+
+.debug_loclists
+ *(.debug_loclists .debug_loclists.*)
+
+.debug_frame
+ *(.debug_frame .debug_frame.*)
+
+.debug_macro
+ *(.debug_macro .debug_macro.*)
+
+.debug_macinfo
+ *(.debug_macinfo .debug_macinfo.*)
+
+.debug_names
+ *(.debug_names .debug_names.*)
+
+.debug_pubnames
+ *(.debug_pubnames .debug_pubnames.*)
+
+.debug_pubtypes
+ *(.debug_pubtypes .debug_pubtypes.*)
+
+.debug_types
+ *(.debug_types .debug_types.*)
+
+.debug_sup
+ *(.debug_sup .debug_sup.*)
+
+.debug_cu_index
+ *(.debug_cu_index .debug_cu_index.*)
+
+.debug_tu_index
+ *(.debug_tu_index .debug_tu_index.*)
+
+.gdb_index
+ *(.gdb_index)
+
+.debug_gdb_scripts
+ *(.debug_gdb_scripts)
+
+.debug_abbrev.dwo
+ *(.debug_abbrev.dwo .debug_abbrev.dwo.*)
+
+.debug_info.dwo
+ *(.debug_info.dwo .debug_info.dwo.*)
+
+.debug_line.dwo
+ *(.debug_line.dwo .debug_line.dwo.*)
+
+.debug_loclists.dwo
+ *(.debug_loclists.dwo .debug_loclists.dwo.*)
+
+.debug_macro.dwo
+ *(.debug_macro.dwo .debug_macro.dwo.*)
+
+.debug_rnglists.dwo
+ *(.debug_rnglists.dwo .debug_rnglists.dwo.*)
+
+.debug_str.dwo
+ *(.debug_str.dwo .debug_str.dwo.*)
+
+.debug_str_offsets.dwo
+ *(.debug_str_offsets.dwo .debug_str_offsets.dwo.*)
+
+.eh_frame
+ *(.eh_frame)
+
+.eh_frame_hdr
+ *(.eh_frame_hdr)
+
+/DISCARD/
+ *(.comment)
+ *(.note*)
+                [!provide]                        PROVIDE (___runprgm_reloc_len = (___runprgm_reloc_end - ___runprgm_reloc_start))
+LOAD obj/live-benchmark/P3DLIVE.o
+LOAD obj/live-benchmark/crt0.o
+START GROUP
+LOAD C:/CEdev/lib/libc/allocator_standard.a
+LOAD C:/CEdev/lib/crt/libcrt_os.a
+LOAD C:/CEdev/lib/ce/libce.a
+LOAD C:/CEdev/lib/softfloat/libsoftfloat.a
+LOAD C:/CEdev/lib/libc/libc_os.a
+LOAD C:/CEdev/lib/libcxx/libcxx.a
+END GROUP
+OUTPUT(bin/P3DLIVE.obj elf32-z80)
