@@ -1,0 +1,18 @@
+{
+  "rom": "D:/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/experiments/prepacked-wall-runs/bin/PWRLFST.8xp"
+  ],
+  "target": {"name": "PWRLFST", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": ["action|launch", "delay|120000", "hash|result"],
+  "hashes": {
+    "result": {
+      "description": "Intentional full-RAM dump after live candidate",
+      "start": "ram_start",
+      "size": "ram_size",
+      "expected_CRCs": ["00000000"]
+    }
+  }
+}

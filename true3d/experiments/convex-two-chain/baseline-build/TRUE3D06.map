@@ -1,0 +1,395 @@
+
+Merging object attributes
+
+
+Discarded input sections
+
+ .comment       0x00000000      0x1bd obj/release/TRUE3D06.o
+ .note.GNU-stack
+                0x00000000        0x0 obj/release/TRUE3D06.o
+ .init.weak_crt
+                0x00000000       0x10 obj/release/TRUE3D06.o
+ .text          0x00000000        0x0 obj/release/crt0.o
+ .data          0x00000000        0x0 obj/release/crt0.o
+ .bss           0x00000000        0x0 obj/release/crt0.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+prgm             0x00d1a87f         0x00400000
+bss              0x00d052c6         0x0000ed12
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+                0x00d1a87f                        LOAD_ADDR = 0xd1a87f
+                0x00d052c6                        BSSHEAP_LOW = 0xd052c6
+                0x00d13fd8                        BSSHEAP_HIGH = 0xd13fd8
+                0x00d1a87e                        STACK_HIGH = 0xd1a87e
+                0x00000001                        __TICE__ = 0x1
+                0x00d1a87f                        . = LOAD_ADDR
+
+.header         0x00d1a87f       0x28
+ *(.header)
+ .header        0x00d1a87f        0x3 obj/release/crt0.o
+ *(.header.icon)
+ .header.icon   0x00d1a882       0x25 obj/release/TRUE3D06.o
+                0x00d1a887                ___description
+
+.init           0x00d1a8a7      0x152
+ *(.init)
+ .init          0x00d1a8a7      0x152 obj/release/crt0.o
+                0x00d1a8a7                __start
+                0x00d1a904                __libload_library_FILEIOC
+                0x00d1a90e                _ti_Open
+                0x00d1a912                _ti_Close
+                0x00d1a916                _ti_GetSize
+                0x00d1a91a                _ti_GetDataPtr
+                0x00d1a91e                __libload_library_GRAPHX
+                0x00d1a927                _gfx_Begin
+                0x00d1a92b                _gfx_End
+                0x00d1a92f                _gfx_SetColor
+                0x00d1a933                _gfx_SetDraw
+                0x00d1a937                _gfx_SwapDraw
+                0x00d1a93b                _gfx_PrintChar
+                0x00d1a93f                _gfx_PrintUInt
+                0x00d1a943                _gfx_PrintStringXY
+                0x00d1a947                _gfx_SetTextBGColor
+                0x00d1a94b                _gfx_SetTextFGColor
+                0x00d1a94f                _gfx_SetTextTransparentColor
+                0x00d1a953                _gfx_FillRectangle_NoClip
+                0x00d1a957                _gfx_SetTextScale
+                0x00d1a95b                _gfx_Wait
+                0x00d1a95f                __libload_library_KEYPADC
+                0x00d1a969                _kb_Reset
+                0x00d1a9bd                ___exithl
+                0x00d1a9be                _exit.sp
+
+.text           0x00d1a9f9     0x6e31
+ *(.text.unlikely .text.*_unlikely .text.unlikely.*)
+ *(.text.exit .text.exit.*)
+ *(.text.startup .text.startup.*)
+ *(.text.hot .text.hot.*)
+ *(SORT_BY_NAME(.text.sorted.*))
+ *(.text .stub .text.* .gnu.linkonce.t.*)
+ .text          0x00d1a9f9      0x1b4 obj/release/TRUE3D06.o
+                0x00d1a9f9                _present_low_frame_fast
+                0x00d1aa60                _present_low_frame_32_fast
+                0x00d1ab1e                __frameset
+                0x00d1ab2c                __frameset0
+                0x00d1ab37                __ishrs_1
+                0x00d1ab45                __ishru_1
+                0x00d1ab53                __lcmpzero
+                0x00d1ab53                __lequzero
+                0x00d1ab5e                _clock
+                0x00d1ab69                _memset
+                0x00d1ab88                _atomic_load_increasing_32
+ .text._engine_init
+                0x00d1abad      0x52b obj/release/TRUE3D06.o
+                0x00d1abad                _engine_init
+ .text._room_face_holds_portal
+                0x00d1b0d8       0xec obj/release/TRUE3D06.o
+ .text._configure_portal_on_face
+                0x00d1b1c4      0x37a obj/release/TRUE3D06.o
+ .text._rebuild_camera_basis
+                0x00d1b53e      0x160 obj/release/TRUE3D06.o
+ .text._collide_with_room
+                0x00d1b69e      0x1ac obj/release/TRUE3D06.o
+ .text._angle_sine
+                0x00d1b84a       0x57 obj/release/TRUE3D06.o
+ .text._engine_graphics_init
+                0x00d1b8a1      0x29d obj/release/TRUE3D06.o
+                0x00d1b8a1                _engine_graphics_init
+ .text._configure_render_mode
+                0x00d1bb3e       0xbc obj/release/TRUE3D06.o
+ .text._engine_update
+                0x00d1bbfa     0x1512 obj/release/TRUE3D06.o
+                0x00d1bbfa                _engine_update
+ .text._place_portal
+                0x00d1d10c      0x407 obj/release/TRUE3D06.o
+ .text._transform_portal_point
+                0x00d1d513       0xe6 obj/release/TRUE3D06.o
+ .text._transform_portal_vector
+                0x00d1d5f9      0x1fd obj/release/TRUE3D06.o
+ .text._add_signed_axis
+                0x00d1d7f6       0x97 obj/release/TRUE3D06.o
+ .text._engine_render
+                0x00d1d88d      0x26d obj/release/TRUE3D06.o
+                0x00d1d88d                _engine_render
+ .text._render_camera
+                0x00d1dafa     0x122a obj/release/TRUE3D06.o
+ .text._collect_room_polygons
+                0x00d1ed24      0xed5 obj/release/TRUE3D06.o
+ .text._write_frame_span
+                0x00d1fbf9       0x73 obj/release/TRUE3D06.o
+ .text._projection_scale_for_depth
+                0x00d1fc6c       0x72 obj/release/TRUE3D06.o
+ .text._half_projected
+                0x00d1fcde        0xe obj/release/TRUE3D06.o
+ .text._transform_point
+                0x00d1fcec      0x1c7 obj/release/TRUE3D06.o
+ .text._project_camera_point
+                0x00d1feb3      0x145 obj/release/TRUE3D06.o
+ .text._clip_and_project
+                0x00d1fff8      0x329 obj/release/TRUE3D06.o
+ .text._polygon_intersects_layer
+                0x00d20321      0x218 obj/release/TRUE3D06.o
+ .text._rasterize_polygon
+                0x00d20539      0xa49 obj/release/TRUE3D06.o
+ .text._camera_axis_scaled
+                0x00d20f82      0x183 obj/release/TRUE3D06.o
+ .text._true3d_level_open
+                0x00d21105       0xa1 obj/release/TRUE3D06.o
+                0x00d21105                _true3d_level_open
+ .text._bind_level
+                0x00d211a6      0x2bb obj/release/TRUE3D06.o
+ .text._true3d_level_close
+                0x00d21461       0x2f obj/release/TRUE3D06.o
+                0x00d21461                _true3d_level_close
+ .text._main    0x00d21490      0x39a obj/release/TRUE3D06.o
+                0x00d21490                _main
+ *(.gnu.warning)
+
+.rodata         0x00d2182a      0x1f2
+ *(.rodata .rodata.* .gnu.linkonce.r.*)
+ .rodata._base_palette_rgb
+                0x00d2182a       0x27 obj/release/TRUE3D06.o
+ .rodata._shade_numerator
+                0x00d21851        0x4 obj/release/TRUE3D06.o
+ .rodata._box_face_vertices
+                0x00d21855       0x18 obj/release/TRUE3D06.o
+ .rodata._face_normals
+                0x00d2186d       0x36 obj/release/TRUE3D06.o
+ .rodata._face_right_vectors
+                0x00d218a3       0x36 obj/release/TRUE3D06.o
+ .rodata._face_up_vectors
+                0x00d218d9       0x36 obj/release/TRUE3D06.o
+ *fill*         0x00d2190f        0x1 
+ .rodata._quarter_sine
+                0x00d21910       0x82 obj/release/TRUE3D06.o
+ .rodata._face_light_level
+                0x00d21992        0x6 obj/release/TRUE3D06.o
+ .rodata._.str  0x00d21998        0x9 obj/release/TRUE3D06.o
+ .rodata._.str.1
+                0x00d219a1        0x5 obj/release/TRUE3D06.o
+ .rodata._.str.2
+                0x00d219a6        0x8 obj/release/TRUE3D06.o
+ .rodata._.str.3
+                0x00d219ae        0x8 obj/release/TRUE3D06.o
+ .rodata._.str.1.4
+                0x00d219b6        0x2 obj/release/TRUE3D06.o
+ .rodata._builtin_level
+                0x00d219b8       0x42 obj/release/TRUE3D06.o
+ .rodata.libload
+                0x00d219fa       0x22 obj/release/crt0.o
+
+.init_array     0x00d21a1c        0x0
+                [!provide]                        PROVIDE (__init_array_start = .)
+ *(.preinit_array)
+ *(SORT_BY_INIT_PRIORITY(.init_array.*))
+ *(.init_array)
+                [!provide]                        PROVIDE (__init_array_end = .)
+
+.fini_array     0x00d21a1c        0x0
+                [!provide]                        PROVIDE (__fini_array_start = .)
+ *(SORT_BY_INIT_PRIORITY(.fini_array.*))
+ *(.fini_array)
+                [!provide]                        PROVIDE (__fini_array_end = .)
+                0x00d21a1c                        ___data_low = .
+
+.data           0x00d21a1c       0x5c
+ *(.data .data.* .gnu.linkonce.d.*)
+ .data._portals
+                0x00d21a1c       0x5c obj/release/TRUE3D06.o
+ *(.data1)
+                0x00d21a78                        ___runprgm_reloc_start = .
+ *(.runprgm.reloc)
+                0x00d21a78                        ___runprgm_reloc_end = .
+                0x00d21a78                        ___data_high = .
+                0x0000005c                        ___data_len = (___data_high - ___data_low)
+                0x00d052c6                        . = BSSHEAP_LOW
+                0x00d052c6                        ___bss_low = .
+
+.bss            0x00d052c6     0x52aa
+ *(.dynbss)
+ *(.bss .bss.* .gnu.linkonce.b.*)
+ .bss._portal_lod_state
+                0x00d052c6        0x2 obj/release/TRUE3D06.o
+ .bss._projection_scale_table
+                0x00d052c8     0x1000 obj/release/TRUE3D06.o
+ .bss._far_projection_scale_table
+                0x00d062c8     0x1000 obj/release/TRUE3D06.o
+ .bss._edge_reciprocal_table
+                0x00d072c8     0x1000 obj/release/TRUE3D06.o
+ .bss._render_layers
+                0x00d082c8      0xa4c obj/release/TRUE3D06.o
+ .bss._active_render_height
+                0x00d08d14        0x1 obj/release/TRUE3D06.o
+ .bss._active_render_width
+                0x00d08d15        0x1 obj/release/TRUE3D06.o
+ .bss._active_render_shift
+                0x00d08d16        0x1 obj/release/TRUE3D06.o
+ .bss._low_frame
+                0x00d08d17      0xc02 obj/release/TRUE3D06.o
+                0x00d08d17                _low_frame
+ .bss._room_count
+                0x00d09919        0x1 obj/release/TRUE3D06.o
+ .bss._rooms    0x00d0991a       0x68 obj/release/TRUE3D06.o
+ .bss._world_vertices
+                0x00d09982      0x180 obj/release/TRUE3D06.o
+ .bss._world_faces
+                0x00d09b02      0x120 obj/release/TRUE3D06.o
+ .bss._active_horizon_near_limit
+                0x00d09c22        0x1 obj/release/TRUE3D06.o
+ .bss._active_horizon_far_limit
+                0x00d09c23        0x1 obj/release/TRUE3D06.o
+ .bss._low_row_offsets
+                0x00d09c24       0x60 obj/release/TRUE3D06.o
+ .bss._camera_vertices
+                0x00d09c84      0x240 obj/release/TRUE3D06.o
+ .bss._vertex_projectable
+                0x00d09ec4       0x40 obj/release/TRUE3D06.o
+ .bss._screen_vertices
+                0x00d09f04      0x180 obj/release/TRUE3D06.o
+ .bss._clip_input
+                0x00d0a084       0x48 obj/release/TRUE3D06.o
+ .bss._clip_output
+                0x00d0a0cc       0x48 obj/release/TRUE3D06.o
+ .bss._span_left
+                0x00d0a114       0x90 obj/release/TRUE3D06.o
+ .bss._span_right
+                0x00d0a1a4       0x90 obj/release/TRUE3D06.o
+ .bss._portal_lod_frame
+                0x00d0a234      0x300 obj/release/TRUE3D06.o
+ .bss._level    0x00d0a534        0x6 obj/release/TRUE3D06.o
+ .bss._level_source
+                0x00d0a53a        0x2 obj/release/TRUE3D06.o
+ .bss._engine   0x00d0a53c       0x34 obj/release/TRUE3D06.o
+ *(COMMON)
+                0x00d0a570                        ___bss_high = .
+                0x000052aa                        ___bss_len = (___bss_high - ___bss_low)
+                0x00000001                        ASSERT ((. <= BSSHEAP_HIGH), Error: BSS exceed BSSHEAP_HIGH limit)
+                0x00d0a570                        ___heap_low = .
+                0x00d13fd8                        . = BSSHEAP_HIGH
+                0x00d13fd8                        ___heap_high = .
+
+.runprgm
+ *(.runprgm.reloc)
+
+.debug_info
+ *(.debug_info .debug_info.*)
+
+.debug_abbrev
+ *(.debug_abbrev .debug_abbrev.*)
+
+.debug_line
+ *(.debug_line .debug_line.*)
+
+.debug_line_str
+ *(.debug_line_str .debug_line_str.*)
+
+.debug_str
+ *(.debug_str .debug_str.*)
+
+.debug_str_offsets
+ *(.debug_str_offsets .debug_str_offsets.*)
+
+.debug_addr
+ *(.debug_addr .debug_addr.*)
+
+.debug_aranges
+ *(.debug_aranges .debug_aranges.*)
+
+.debug_ranges
+ *(.debug_ranges .debug_ranges.*)
+
+.debug_rnglists
+ *(.debug_rnglists .debug_rnglists.*)
+
+.debug_loc
+ *(.debug_loc .debug_loc.*)
+
+.debug_loclists
+ *(.debug_loclists .debug_loclists.*)
+
+.debug_frame
+ *(.debug_frame .debug_frame.*)
+
+.debug_macro
+ *(.debug_macro .debug_macro.*)
+
+.debug_macinfo
+ *(.debug_macinfo .debug_macinfo.*)
+
+.debug_names
+ *(.debug_names .debug_names.*)
+
+.debug_pubnames
+ *(.debug_pubnames .debug_pubnames.*)
+
+.debug_pubtypes
+ *(.debug_pubtypes .debug_pubtypes.*)
+
+.debug_types
+ *(.debug_types .debug_types.*)
+
+.debug_sup
+ *(.debug_sup .debug_sup.*)
+
+.debug_cu_index
+ *(.debug_cu_index .debug_cu_index.*)
+
+.debug_tu_index
+ *(.debug_tu_index .debug_tu_index.*)
+
+.gdb_index
+ *(.gdb_index)
+
+.debug_gdb_scripts
+ *(.debug_gdb_scripts)
+
+.debug_abbrev.dwo
+ *(.debug_abbrev.dwo .debug_abbrev.dwo.*)
+
+.debug_info.dwo
+ *(.debug_info.dwo .debug_info.dwo.*)
+
+.debug_line.dwo
+ *(.debug_line.dwo .debug_line.dwo.*)
+
+.debug_loclists.dwo
+ *(.debug_loclists.dwo .debug_loclists.dwo.*)
+
+.debug_macro.dwo
+ *(.debug_macro.dwo .debug_macro.dwo.*)
+
+.debug_rnglists.dwo
+ *(.debug_rnglists.dwo .debug_rnglists.dwo.*)
+
+.debug_str.dwo
+ *(.debug_str.dwo .debug_str.dwo.*)
+
+.debug_str_offsets.dwo
+ *(.debug_str_offsets.dwo .debug_str_offsets.dwo.*)
+
+.eh_frame
+ *(.eh_frame)
+
+.eh_frame_hdr
+ *(.eh_frame_hdr)
+
+/DISCARD/
+ *(.comment)
+ *(.note*)
+                [!provide]                        PROVIDE (___runprgm_reloc_len = (___runprgm_reloc_end - ___runprgm_reloc_start))
+LOAD obj/release/TRUE3D06.o
+LOAD obj/release/crt0.o
+START GROUP
+LOAD C:/CEdev/lib/libc/allocator_standard.a
+LOAD C:/CEdev/lib/crt/libcrt_os.a
+LOAD C:/CEdev/lib/ce/libce.a
+LOAD C:/CEdev/lib/softfloat/libsoftfloat.a
+LOAD C:/CEdev/lib/libc/libc_os.a
+LOAD C:/CEdev/lib/libcxx/libcxx.a
+END GROUP
+OUTPUT(bin/TRUE3D06.obj elf32-z80)

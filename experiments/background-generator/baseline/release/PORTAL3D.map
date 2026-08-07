@@ -1,0 +1,396 @@
+
+Merging object attributes
+
+
+Discarded input sections
+
+ .comment       0x00000000      0x1bd obj/release/PORTAL3D.o
+ .note.GNU-stack
+                0x00000000        0x0 obj/release/PORTAL3D.o
+ .init.weak_crt
+                0x00000000       0x10 obj/release/PORTAL3D.o
+ .text          0x00000000        0x0 obj/release/crt0.o
+ .data          0x00000000        0x0 obj/release/crt0.o
+ .bss           0x00000000        0x0 obj/release/crt0.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+prgm             0x00d1a87f         0x00400000
+bss              0x00d052c6         0x0000ed12
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+                0x00d1a87f                        LOAD_ADDR = 0xd1a87f
+                0x00d052c6                        BSSHEAP_LOW = 0xd052c6
+                0x00d13fd8                        BSSHEAP_HIGH = 0xd13fd8
+                0x00d1a87e                        STACK_HIGH = 0xd1a87e
+                0x00000001                        __TICE__ = 0x1
+                0x00d1a87f                        . = LOAD_ADDR
+
+.header         0x00d1a87f       0x19
+ *(.header)
+ .header        0x00d1a87f        0x3 obj/release/crt0.o
+ *(.header.icon)
+ .header.icon   0x00d1a882       0x16 obj/release/PORTAL3D.o
+                0x00d1a887                ___description
+
+.init           0x00d1a898      0x138
+ *(.init)
+ .init          0x00d1a898      0x138 obj/release/crt0.o
+                0x00d1a898                __start
+                0x00d1a8f5                __libload_library_GRAPHX
+                0x00d1a8fe                _gfx_Begin
+                0x00d1a902                _gfx_End
+                0x00d1a906                _gfx_SetColor
+                0x00d1a90a                _gfx_SetDraw
+                0x00d1a90e                _gfx_SwapDraw
+                0x00d1a912                _gfx_PrintChar
+                0x00d1a916                _gfx_PrintUInt
+                0x00d1a91a                _gfx_PrintStringXY
+                0x00d1a91e                _gfx_SetTextBGColor
+                0x00d1a922                _gfx_SetTextFGColor
+                0x00d1a926                _gfx_SetTextTransparentColor
+                0x00d1a92a                _gfx_FillRectangle_NoClip
+                0x00d1a92e                _gfx_SetTextScale
+                0x00d1a932                _gfx_Wait
+                0x00d1a936                __libload_library_KEYPADC
+                0x00d1a940                _kb_Reset
+                0x00d1a994                ___exithl
+                0x00d1a995                _exit.sp
+
+.text           0x00d1a9d0     0x42ef
+ *(.text.unlikely .text.*_unlikely .text.unlikely.*)
+ *(.text.exit .text.exit.*)
+ *(.text.startup .text.startup.*)
+ *(.text.hot .text.hot.*)
+ *(SORT_BY_NAME(.text.sorted.*))
+ *(.text .stub .text.* .gnu.linkonce.t.*)
+ .text          0x00d1a9d0       0x54 obj/release/PORTAL3D.o
+                0x00d1a9d0                __frameset
+                0x00d1a9de                __frameset0
+                0x00d1a9e9                __lequzero
+                0x00d1a9e9                __lcmpzero
+                0x00d1a9f4                _clock
+                0x00d1a9ff                _atomic_load_increasing_32
+ .text._game_graphics_init
+                0x00d1aa24      0xba2 obj/release/PORTAL3D.o
+                0x00d1aa24                _game_graphics_init
+ .text._render_portal_transform_plan_init
+                0x00d1b5c6       0x86 obj/release/PORTAL3D.o
+ .text._grid_projection_init
+                0x00d1b64c       0x70 obj/release/PORTAL3D.o
+ .text._game_update
+                0x00d1b6bc      0x31d obj/release/PORTAL3D.o
+                0x00d1b6bc                _game_update
+ .text._place_portal
+                0x00d1b9d9      0x1ab obj/release/PORTAL3D.o
+ .text._try_player_portal
+                0x00d1bb84      0x40a obj/release/PORTAL3D.o
+ .text._move_without_portal
+                0x00d1bf8e      0x205 obj/release/PORTAL3D.o
+ .text._render_portal_tables_prepare_dynamic
+                0x00d1c193      0x1d9 obj/release/PORTAL3D.o
+ .text._render_builtin_face_value
+                0x00d1c36c       0x76 obj/release/PORTAL3D.o
+ .text._game_render
+                0x00d1c3e2      0x808 obj/release/PORTAL3D.o
+                0x00d1c3e2                _game_render
+ .text._ray_stepper_init
+                0x00d1cbea       0xd3 obj/release/PORTAL3D.o
+ .text._delta_for_component
+                0x00d1ccbd       0x5a obj/release/PORTAL3D.o
+ .text._fixed_scale_mul
+                0x00d1cd17       0x3a obj/release/PORTAL3D.o
+ .text._render_column
+                0x00d1cd51      0x32f obj/release/PORTAL3D.o
+ .text._main    0x00d1d080      0x1ff obj/release/PORTAL3D.o
+                0x00d1d080                _main
+ .text._render_frame
+                0x00d1d27f      0x1ed obj/release/PORTAL3D.o
+ .text._render_asm_cast_wall_begin
+                0x00d1d46c      0x3ee obj/release/PORTAL3D.o
+                0x00d1d46c                _render_asm_cast_wall_begin
+                0x00d1d4ec                _render_asm_cast_wall_continue
+ .text._render_asm_add_projected_grid_segment
+                0x00d1d85a      0x654 obj/release/PORTAL3D.o
+                0x00d1d85a                _render_asm_add_projected_grid_segment
+ .text._render_asm_clear_background
+                0x00d1deae       0xe7 obj/release/PORTAL3D.o
+                0x00d1deae                _render_asm_clear_background
+ .text._render_asm_repair_horizon
+                0x00d1df95       0x30 obj/release/PORTAL3D.o
+                0x00d1df95                _render_asm_repair_horizon
+ .text._render_asm_draw_horizontal_grid_pair
+                0x00d1dfc5      0x147 obj/release/PORTAL3D.o
+                0x00d1dfc5                _render_asm_draw_horizontal_grid_pair
+ .text._render_asm_find_portal
+                0x00d1e10c       0xf9 obj/release/PORTAL3D.o
+                0x00d1e10c                _render_asm_find_portal
+ .text._render_asm_transform_ray
+                0x00d1e205      0x2af obj/release/PORTAL3D.o
+                0x00d1e205                _render_asm_transform_ray
+                0x00d1e215                _render_asm_transform_ray_state
+ .text._render_asm_portal_opening
+                0x00d1e4b4       0x97 obj/release/PORTAL3D.o
+                0x00d1e4b4                _render_asm_portal_opening
+ .text._render_asm_draw_wall_segment
+                0x00d1e54b      0x22e obj/release/PORTAL3D.o
+                0x00d1e54b                _render_asm_draw_wall_segment
+ .text._render_asm_draw_wall_segment_registers
+                0x00d1e779      0x1a1 obj/release/PORTAL3D.o
+                0x00d1e779                _render_asm_draw_wall_segment_registers
+ .text._render_asm_draw_solid_segment
+                0x00d1e91a       0x7b obj/release/PORTAL3D.o
+                0x00d1e91a                _render_asm_draw_solid_segment
+ .text._render_asm_draw_portal_mask
+                0x00d1e995      0x32a obj/release/PORTAL3D.o
+                0x00d1e995                _render_asm_draw_portal_mask
+ *(.gnu.warning)
+
+.rodata         0x00d1ecc0      0x6f4
+ *(.rodata .rodata.* .gnu.linkonce.r.*)
+ .rodata._try_player_portal
+                0x00d1ecc0       0x18 obj/release/PORTAL3D.o
+ .rodata._render_wall_map
+                0x00d1ecd8      0x100 obj/release/PORTAL3D.o
+                0x00d1ecd8                _render_wall_map
+ .rodata._render_builtin_portal_by_tile
+                0x00d1edd8      0x100 obj/release/PORTAL3D.o
+                0x00d1edd8                _render_builtin_portal_by_tile
+ .rodata._render_reciprocal_delta
+                0x00d1eed8      0x354 obj/release/PORTAL3D.o
+                0x00d1eed8                _render_reciprocal_delta
+ .rodata._render_builtin_portals
+                0x00d1f22c       0x3c obj/release/PORTAL3D.o
+                0x00d1f22c                _render_builtin_portals
+ .rodata._game_graphics_init.shade_offsets
+                0x00d1f268        0x4 obj/release/PORTAL3D.o
+ .rodata._game_graphics_init.wall_palette_rgb
+                0x00d1f26c       0x60 obj/release/PORTAL3D.o
+ .rodata._direction_y
+                0x00d1f2cc       0x80 obj/release/PORTAL3D.o
+ .rodata._map_row_offsets
+                0x00d1f34c       0x10 obj/release/PORTAL3D.o
+ .rodata._render_portal_transform_flags
+                0x00d1f35c       0x10 obj/release/PORTAL3D.o
+ .rodata._portal_visit_bits
+                0x00d1f36c        0x8 obj/release/PORTAL3D.o
+ .rodata._.str  0x00d1f374        0x9 obj/release/PORTAL3D.o
+ .rodata._.str.1
+                0x00d1f37d        0x5 obj/release/PORTAL3D.o
+ .rodata.render_portal_rotation
+                0x00d1f382       0x10 obj/release/PORTAL3D.o
+ .rodata.libload
+                0x00d1f392       0x22 obj/release/crt0.o
+
+.init_array     0x00d1f3b4        0x0
+                [!provide]                        PROVIDE (__init_array_start = .)
+ *(.preinit_array)
+ *(SORT_BY_INIT_PRIORITY(.init_array.*))
+ *(.init_array)
+                [!provide]                        PROVIDE (__init_array_end = .)
+
+.fini_array     0x00d1f3b4        0x0
+                [!provide]                        PROVIDE (__fini_array_start = .)
+ *(SORT_BY_INIT_PRIORITY(.fini_array.*))
+ *(.fini_array)
+                [!provide]                        PROVIDE (__fini_array_end = .)
+                0x00d1f3b4                        ___data_low = .
+
+.data           0x00d1f3b4        0x4
+ *(.data .data.* .gnu.linkonce.d.*)
+ .data._render_primary_face
+                0x00d1f3b4        0x2 obj/release/PORTAL3D.o
+ .data._render_secondary_face
+                0x00d1f3b6        0x2 obj/release/PORTAL3D.o
+ *(.data1)
+                0x00d1f3b8                        ___runprgm_reloc_start = .
+ *(.runprgm.reloc)
+                0x00d1f3b8                        ___runprgm_reloc_end = .
+                0x00d1f3b8                        ___data_high = .
+                0x00000004                        ___data_len = (___data_high - ___data_low)
+                0x00d052c6                        . = BSSHEAP_LOW
+                0x00d052c6                        ___bss_low = .
+
+.bss            0x00d052c6     0xc4df
+ *(.dynbss)
+ *(.bss .bss.* .gnu.linkonce.b.*)
+ .bss._render_direction_y_by_angle
+                0x00d052c6     0x8000 obj/release/PORTAL3D.o
+ .bss._render_fov_by_direction
+                0x00d0d2c6      0x402 obj/release/PORTAL3D.o
+ .bss._render_screen_rows
+                0x00d0d6c8      0x3c0 obj/release/PORTAL3D.o
+                0x00d0d6c8                _render_screen_rows
+ .bss._render_wall_scale_profiles
+                0x00d0da88      0x800 obj/release/PORTAL3D.o
+ .bss._render_wall_texture_boundaries
+                0x00d0e288      0x900 obj/release/PORTAL3D.o
+                0x00d0e288                _render_wall_texture_boundaries
+ .bss._render_wall_scale_profile_index
+                0x00d0eb88     0x2000 obj/release/PORTAL3D.o
+ .bss._render_grid_near_projection
+                0x00d10b88        0xa obj/release/PORTAL3D.o
+                0x00d10b88                _render_grid_near_projection
+ .bss._grid_far_projection
+                0x00d10b92        0xa obj/release/PORTAL3D.o
+                0x00d10b92                _grid_far_projection
+ .bss._render_portal_profile_by_u
+                0x00d10b9c      0x100 obj/release/PORTAL3D.o
+                0x00d10b9c                _render_portal_profile_by_u
+ .bss._render_wall_texture_runs
+                0x00d10c9c      0x401 obj/release/PORTAL3D.o
+                0x00d10c9c                _render_wall_texture_runs
+ .bss._render_wall_colors
+                0x00d1109d      0x200 obj/release/PORTAL3D.o
+                0x00d1109d                _render_wall_colors
+ .bss._render_scratch
+                0x00d1129d       0x10 obj/release/PORTAL3D.o
+ .bss._render_portal_transform_plans
+                0x00d112ad       0x60 obj/release/PORTAL3D.o
+                0x00d112ad                _render_portal_transform_plans
+ .bss._render_portal_faces
+                0x00d1130d      0x400 obj/release/PORTAL3D.o
+                0x00d1130d                _render_portal_faces
+ *fill*         0x00d1170d        0x1 
+ .bss._game     0x00d1170e       0x12 obj/release/PORTAL3D.o
+ .bss._fps_overlay_enabled
+                0x00d11720        0x1 obj/release/PORTAL3D.o
+ *fill*         0x00d11721        0x1 
+ .bss._fps_tenths
+                0x00d11722        0x2 obj/release/PORTAL3D.o
+ .bss._fps_smoothed_ticks
+                0x00d11724        0x4 obj/release/PORTAL3D.o
+ .bss.render_asm_scratch
+                0x00d11728       0x7d obj/release/PORTAL3D.o
+                0x00d11728                _render_ray_state
+ *(COMMON)
+                0x00d117a5                        ___bss_high = .
+                0x0000c4df                        ___bss_len = (___bss_high - ___bss_low)
+                0x00000001                        ASSERT ((. <= BSSHEAP_HIGH), Error: BSS exceed BSSHEAP_HIGH limit)
+                0x00d117a5                        ___heap_low = .
+                0x00d13fd8                        . = BSSHEAP_HIGH
+                0x00d13fd8                        ___heap_high = .
+
+.runprgm
+ *(.runprgm.reloc)
+
+.debug_info
+ *(.debug_info .debug_info.*)
+
+.debug_abbrev
+ *(.debug_abbrev .debug_abbrev.*)
+
+.debug_line
+ *(.debug_line .debug_line.*)
+
+.debug_line_str
+ *(.debug_line_str .debug_line_str.*)
+
+.debug_str
+ *(.debug_str .debug_str.*)
+
+.debug_str_offsets
+ *(.debug_str_offsets .debug_str_offsets.*)
+
+.debug_addr
+ *(.debug_addr .debug_addr.*)
+
+.debug_aranges
+ *(.debug_aranges .debug_aranges.*)
+
+.debug_ranges
+ *(.debug_ranges .debug_ranges.*)
+
+.debug_rnglists
+ *(.debug_rnglists .debug_rnglists.*)
+
+.debug_loc
+ *(.debug_loc .debug_loc.*)
+
+.debug_loclists
+ *(.debug_loclists .debug_loclists.*)
+
+.debug_frame
+ *(.debug_frame .debug_frame.*)
+
+.debug_macro
+ *(.debug_macro .debug_macro.*)
+
+.debug_macinfo
+ *(.debug_macinfo .debug_macinfo.*)
+
+.debug_names
+ *(.debug_names .debug_names.*)
+
+.debug_pubnames
+ *(.debug_pubnames .debug_pubnames.*)
+
+.debug_pubtypes
+ *(.debug_pubtypes .debug_pubtypes.*)
+
+.debug_types
+ *(.debug_types .debug_types.*)
+
+.debug_sup
+ *(.debug_sup .debug_sup.*)
+
+.debug_cu_index
+ *(.debug_cu_index .debug_cu_index.*)
+
+.debug_tu_index
+ *(.debug_tu_index .debug_tu_index.*)
+
+.gdb_index
+ *(.gdb_index)
+
+.debug_gdb_scripts
+ *(.debug_gdb_scripts)
+
+.debug_abbrev.dwo
+ *(.debug_abbrev.dwo .debug_abbrev.dwo.*)
+
+.debug_info.dwo
+ *(.debug_info.dwo .debug_info.dwo.*)
+
+.debug_line.dwo
+ *(.debug_line.dwo .debug_line.dwo.*)
+
+.debug_loclists.dwo
+ *(.debug_loclists.dwo .debug_loclists.dwo.*)
+
+.debug_macro.dwo
+ *(.debug_macro.dwo .debug_macro.dwo.*)
+
+.debug_rnglists.dwo
+ *(.debug_rnglists.dwo .debug_rnglists.dwo.*)
+
+.debug_str.dwo
+ *(.debug_str.dwo .debug_str.dwo.*)
+
+.debug_str_offsets.dwo
+ *(.debug_str_offsets.dwo .debug_str_offsets.dwo.*)
+
+.eh_frame
+ *(.eh_frame)
+
+.eh_frame_hdr
+ *(.eh_frame_hdr)
+
+/DISCARD/
+ *(.comment)
+ *(.note*)
+                [!provide]                        PROVIDE (___runprgm_reloc_len = (___runprgm_reloc_end - ___runprgm_reloc_start))
+LOAD obj/release/PORTAL3D.o
+LOAD obj/release/crt0.o
+START GROUP
+LOAD C:/CEdev/lib/libc/allocator_standard.a
+LOAD C:/CEdev/lib/crt/libcrt_os.a
+LOAD C:/CEdev/lib/ce/libce.a
+LOAD C:/CEdev/lib/softfloat/libsoftfloat.a
+LOAD C:/CEdev/lib/libc/libc_os.a
+LOAD C:/CEdev/lib/libcxx/libcxx.a
+END GROUP
+OUTPUT(bin/PORTAL3D.obj elf32-z80)

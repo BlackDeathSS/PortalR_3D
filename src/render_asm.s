@@ -40,7 +40,12 @@
 	.equ STATE_PORTAL_KIND, 52
 	.equ STATE_PORTAL_ID, 53
 	.equ STATE_PORTAL_HAS_EXIT, 54
-	.equ STATE_SIZE, 55
+	.equ STATE_PORTAL_PLAN, 55
+	.equ STATE_SIZE, 58
+	.equ PLAN_TANGENT_BASE, 0
+	.equ PLAN_NORMAL, 3
+	.equ PLAN_FLAGS, 6
+	.equ PLAN_TANGENT_TO_X, 7
 	.equ GRID_FAR_X, 0
 	.equ GRID_NEAR_X, 2
 	.equ GRID_PROJECTION_POSITIVE_LIMIT, 0
@@ -56,6 +61,8 @@
 	.equ GRID_HORIZONTAL_BYTES, 320
 	.equ GRID_HORIZONTAL_PUSHES, 106
 	.equ GRID_HORIZONTAL_HEAD_BYTES, 2
+	.equ GRID_PACKED_RUN_RATIO, 16
+	.equ GRID_PACKED_RUN_MIN_DX, 256
 	.equ BACKGROUND_HORIZON_COLOR, 2
 	.equ BACKGROUND_FLOOR_COLOR, 3
 	.equ BACKGROUND_CEILING_COLOR, 16
@@ -63,14 +70,13 @@
 	.equ BACKGROUND_CEILING_BYTES, 35840
 	.equ BACKGROUND_HORIZON_BYTES, 5120
 	.equ BACKGROUND_FLOOR_BYTES, 35840
-	.equ BACKGROUND_INTERRUPT_BYTES, 4001
 	.equ BACKGROUND_PUSHES_PER_ITER, 115
 	.equ BACKGROUND_FLOOR_ITERS, 103
 	.equ BACKGROUND_FLOOR_TAIL, 101
 	.equ BACKGROUND_HORIZON_ITERS, 14
 	.equ BACKGROUND_HORIZON_TAIL, 96
-	.equ BACKGROUND_CEILING_ITERS, 92
-	.equ BACKGROUND_CEILING_TAIL, 33
+	.equ BACKGROUND_CEILING_ITERS, 103
+	.equ BACKGROUND_CEILING_TAIL, 101
 	.equ BACKGROUND_REPAIR_TOP_OFFSET, 35840
 	.equ BACKGROUND_REPAIR_TOP_BYTES, 640
 	.equ BACKGROUND_REPAIR_BOTTOM_OFFSET, 40640
@@ -548,16 +554,16 @@ _render_asm_cast_wall_continue:
 	/*
 	 * Resolve the wall face while the hit is still resident in IY.  The old
 	 * path returned to C, repeated the tile key, pushed seven ABI slots, and
-	 * entered _render_asm_find_portal.  C caches the two dynamic portal tile
-	 * keys once per render/placement trace; ordinary walls therefore retain
-	 * the same three-lookup fast rejection, while candidate faces leave the
-	 * linked exit directly beside the persistent DDA state.
+	 * entered _render_asm_find_portal. A direction-major face table now folds
+	 * dynamic/builtin identity, link state, and portal ID into one byte. Linked
+	 * faces leave their predecoded transform plan beside the persistent state.
 	 */
 .Lstate_resolve_portal:
 	xor a, a
 	ld (_render_ray_state + STATE_PORTAL_KIND), a
 	ld (_render_ray_state + STATE_PORTAL_HAS_EXIT), a
 
+	/* Build the padded tile key already used by the DDA hit tail. */
 	ld a, (iy + RAY_WALL_DIRECTION)
 	ld b, a
 	ld a, (iy + RAY_MAP_Y)
@@ -568,110 +574,39 @@ _render_asm_cast_wall_continue:
 	add a, (iy + RAY_MAP_X)
 	ld c, a
 
-	ld a, (_render_ray_state + STATE_PRIMARY_TILE)
-	cp a, c
-	jr z, .Lstate_portal_try_primary
-	ld a, (_render_ray_state + STATE_SECONDARY_TILE)
-	cp a, c
-	jr z, .Lstate_portal_try_secondary_load
-	jr .Lstate_portal_try_builtin
-
-.Lstate_portal_try_primary:
-	push iy
-	ld iy, (_render_ray_state + STATE_GAME)
-	ld a, (iy + 10)
-	cp a, b
-	jr nz, .Lstate_portal_try_secondary_loaded
-	ld a, 1
-	ld (_render_ray_state + STATE_PORTAL_KIND), a
-	ld a, (iy + 15)
-	or a, a
-	jr z, .Lstate_portal_dynamic_return
-	ld hl, (iy + 12)
-	ld (_render_ray_state + STATE_PORTAL_EXIT), hl
-	ld a, (iy + 15)
-	ld (_render_ray_state + STATE_PORTAL_EXIT + 3), a
-	ld a, 10
-	ld (_render_ray_state + STATE_PORTAL_ID), a
-	jr .Lstate_portal_dynamic_found
-
-.Lstate_portal_try_secondary_loaded:
-	ld a, (_render_ray_state + STATE_SECONDARY_TILE)
-	cp a, c
-	jr nz, .Lstate_portal_builtin_after_dynamic
-	ld a, (iy + 14)
-	cp a, b
-	jr nz, .Lstate_portal_builtin_after_dynamic
-	jr .Lstate_portal_secondary_match
-
-.Lstate_portal_try_secondary_load:
-	push iy
-	ld iy, (_render_ray_state + STATE_GAME)
-	ld a, (iy + 14)
-	cp a, b
-	jr nz, .Lstate_portal_builtin_after_dynamic
-
-.Lstate_portal_secondary_match:
-	ld a, 2
-	ld (_render_ray_state + STATE_PORTAL_KIND), a
-	ld a, (iy + 11)
-	or a, a
-	jr z, .Lstate_portal_dynamic_return
-	ld hl, (iy + 8)
-	ld (_render_ray_state + STATE_PORTAL_EXIT), hl
-	ld a, (iy + 11)
-	ld (_render_ray_state + STATE_PORTAL_EXIT + 3), a
-	ld a, 11
-	ld (_render_ray_state + STATE_PORTAL_ID), a
-
-.Lstate_portal_dynamic_found:
-	ld a, 1
-	ld (_render_ray_state + STATE_PORTAL_HAS_EXIT), a
-.Lstate_portal_dynamic_return:
-	pop iy
-	ret
-
-.Lstate_portal_builtin_after_dynamic:
-	pop iy
-
-.Lstate_portal_try_builtin:
-	ld hl, _render_builtin_portal_by_tile
+	/* Direction-major layout makes the live BC pair the complete index. */
+	ld hl, _render_portal_faces
 	ld de, 0
+	ld d, b
 	ld e, c
 	add hl, de
 	ld a, (hl)
 	or a, a
 	ret z
-	dec a
+
+	/* bits 0-1: kind, bit 2: linked, bits 3-6: portal ID. */
 	ld c, a
-	ld de, 0
-	ld d, 6
-	ld e, a
-	mlt de
-	ld hl, _render_builtin_portals
-	add hl, de
-	inc hl
-	inc hl
-	ld a, (hl)
-	cp a, b
-	ret nz
-	inc hl
-	ld a, (hl)
-	ld (_render_ray_state + STATE_PORTAL_EXIT), a
-	inc hl
-	ld a, (hl)
-	ld (_render_ray_state + STATE_PORTAL_EXIT + 1), a
-	inc hl
-	ld a, (hl)
-	ld (_render_ray_state + STATE_PORTAL_EXIT + 2), a
-	ld a, 1
-	ld (_render_ray_state + STATE_PORTAL_EXIT + 3), a
-	ld a, 3
+	and a, 3
 	ld (_render_ray_state + STATE_PORTAL_KIND), a
-	ld a, c
-	ld (_render_ray_state + STATE_PORTAL_ID), a
+	bit 2, c
+	ret z
+
 	ld a, 1
 	ld (_render_ray_state + STATE_PORTAL_HAS_EXIT), a
+	ld a, c
+	rrca
+	rrca
+	rrca
+	and a, 15
+	ld (_render_ray_state + STATE_PORTAL_ID), a
+	ld hl, 0
+	ld l, a
+	add hl, hl
+	add hl, hl
+	add hl, hl
+	ld de, _render_portal_transform_plans
+	add hl, de
+	ld (_render_ray_state + STATE_PORTAL_PLAN), hl
 	ret
 
 	/*
@@ -853,9 +788,8 @@ _render_asm_cast_wall_continue:
  * line in one C ABI transition.
  *
  * Stack slots after __frameset0:
- *   ix+6  GridSegment **end
- *   ix+9  lateral_near
- *   ix+12 lateral_far
+ *   ix+6 lateral_near
+ *   ix+9 lateral_far
  *
  * The local projection core accepts HL=lateral and IY=GridProjection*. For
  * heights 1..255, derived clamp limits keep the high-byte partial product
@@ -870,7 +804,7 @@ _render_asm_add_projected_grid_segment:
 	 *   near x<0  iff lateral<=-175; near x>=320 iff lateral>=174
 	 *   far  x<0  iff lateral<=-2748; far  x>=320 iff lateral>=2731
 	 */
-	ld hl, (ix + 9)
+	ld hl, (ix + 6)
 	bit 7, (ix + 11)
 	jr z, .Lfused_grid_precheck_right
 	ld de, 174
@@ -879,7 +813,7 @@ _render_asm_add_projected_grid_segment:
 	ld a, (_render_grid_lateral_magnitude + 2)
 	bit 7, a
 	jr z, .Lfused_grid_project
-	ld hl, (ix + 12)
+	ld hl, (ix + 9)
 	ld de, 2747
 	add hl, de
 	ld (_render_grid_lateral_magnitude), hl
@@ -904,12 +838,12 @@ _render_asm_add_projected_grid_segment:
 	jp z, .Lfused_grid_return
 
 .Lfused_grid_project:
-	ld hl, (ix + 9)
+	ld hl, (ix + 6)
 	ld iy, _render_grid_near_projection
 	call .Lgrid_project_core
 	ld (_render_grid_near_x), hl
 
-	ld hl, (ix + 12)
+	ld hl, (ix + 9)
 	ld iy, _grid_far_projection
 	call .Lgrid_project_core
 	ld (_render_grid_far_x), hl
@@ -1003,9 +937,6 @@ _render_asm_add_projected_grid_segment:
 	ld a, GRID_FLOOR_COLOR
 	ld (.Lgrid_dynamic_horizontal_color + 1), a
 	ld (.Lgrid_dynamic_vertical_color + 1), a
-	ld (.Lgrid_run_packed_color + 1), a
-	ld (.Lgrid_run_packed_color + 2), a
-	ld (.Lgrid_run_packed_color + 3), a
 	ld hl, (_render_grid_far_x)
 	ld de, (_render_grid_near_x)
 	ld a, (_render_grid_floor_y0)
@@ -1016,9 +947,6 @@ _render_asm_add_projected_grid_segment:
 	ld a, GRID_CEILING_COLOR
 	ld (.Lgrid_dynamic_horizontal_color + 1), a
 	ld (.Lgrid_dynamic_vertical_color + 1), a
-	ld (.Lgrid_run_packed_color + 1), a
-	ld (.Lgrid_run_packed_color + 2), a
-	ld (.Lgrid_run_packed_color + 3), a
 	ld hl, (_render_grid_far_x)
 	ld de, (_render_grid_near_x)
 	ld a, (_render_grid_ceiling_y0)
@@ -1323,22 +1251,30 @@ _render_asm_add_projected_grid_segment:
 	jp nc, .Lgrid_dynamic_vertical
 
 	/*
-	 * Shallow clipped lines are much wider than they are tall.  Skip between
-	 * exact Bresenham Y corrections and emit each horizontal run with packed
-	 * three-byte stores.  Steeper lines retain the very small CPI loop below.
+	 * Wide shallow lines amortize run setup and replace three single-pixel
+	 * loop iterations with one packed store.  Keep shorter runs on the small
+	 * standard loop; the selected path uses a fixed nine-step divider, so its
+	 * setup cost cannot explode when dy is one.
 	 */
+	bit 0, b
+	jr z, .Lgrid_dynamic_standard_horizontal
 	ld a, l
 	or a, a
 	jr z, .Lgrid_dynamic_standard_horizontal
+	/* dy>=20 can never satisfy dx>=16*dy for an in-bounds line. */
+	cp a, 20
+	jr nc, .Lgrid_dynamic_standard_horizontal
+	/* floor(dx/16)>=dy is exactly equivalent and preserves BC/HL. */
+	ld a, c
+	.rept 4
+	srl a
+	.endr
+	add a, 16
+	cp a, l
+	jr c, .Lgrid_dynamic_standard_horizontal
 	push hl
-	add hl, hl
 	pop de
-	add hl, de
-	or a, a
-	sbc hl, bc
-	jp c, .Lgrid_dynamic_run_setup
-	jp z, .Lgrid_dynamic_run_setup
-	ex de, hl
+	jp .Lgrid_dynamic_run_setup
 
 .Lgrid_dynamic_standard_horizontal:
 	ld a, l
@@ -1384,7 +1320,7 @@ _render_asm_add_projected_grid_segment:
 
 /*
  * Inputs are BC=dx, DE=dy, IY=signed row stride, with the start pointer on
- * the stack.  The branch above guarantees dx>=3*dy and dy>0.
+ * the stack.  The branch above guarantees dx>=GRID_PACKED_RUN_RATIO*dy.
  *
  * For GraphX's strict-underflow Bresenham recurrence:
  *   q=dx/dy, r=dx%dy
@@ -1397,25 +1333,40 @@ _render_asm_add_projected_grid_segment:
 	ex de, hl
 	ld a, l
 	ld (_render_grid_clip_floor_delta), a
+	ld a, (.Lgrid_dynamic_horizontal_color + 1)
+	ld (.Lgrid_run_packed_color + 1), a
+	ld (.Lgrid_run_packed_color + 2), a
+	ld (.Lgrid_run_packed_color + 3), a
+	ld a, l
 	dec a
 	ld (_render_grid_clip_ceiling_result), a
 
-	/* Exact unsigned dx/dy.  This executes once per line, not per pixel. */
+	/*
+	 * Exact unsigned 9-bit dx/dy.  Trial divisors dy<<8 .. dy replace the
+	 * discarded quotient-times repeated subtraction, bounding every line to
+	 * nine iterations even for dx=319,dy=1.
+	 */
 	push bc
 	push bc
 	pop hl
-	ld de, 0
 	ld a, (_render_grid_clip_floor_delta)
-	ld e, a
+	ld de, 0
+	ld d, a
 	ld ix, 0
+	ld b, 9
 .Lgrid_dynamic_run_divide:
+	add ix, ix
 	or a, a
 	sbc hl, de
-	jr c, .Lgrid_dynamic_run_divide_done
-	inc ix
-	jr .Lgrid_dynamic_run_divide
-.Lgrid_dynamic_run_divide_done:
+	jr nc, .Lgrid_dynamic_run_divide_accept
 	add hl, de
+	jr .Lgrid_dynamic_run_divide_shift
+.Lgrid_dynamic_run_divide_accept:
+	inc ix
+.Lgrid_dynamic_run_divide_shift:
+	srl d
+	rr e
+	djnz .Lgrid_dynamic_run_divide
 	ld a, l
 	ld (_render_grid_clip_quotient), a
 	push ix
@@ -1820,14 +1771,25 @@ _render_asm_add_projected_grid_segment:
  * Fill the 320x240 draw buffer with a 112-row ceiling, 16-row horizon, and
  * 112-row floor.
  *
- * GraphX's general gfx_FillScreen uses an unrolled PUSH loop, leaves 4000
- * bytes below SP for interrupt handlers, and finishes that prefix with LDDR.
- * This specialized version keeps the same strategy but switches color at both
- * horizon edges. It writes 76,800 bytes instead of filling the whole screen
- * and overwriting two regions. game_render has already called gfx_Wait, so a
- * second library wait is unnecessary.
+ * This specialized version switches color at both horizon edges and writes
+ * exactly 76,800 bytes instead of filling the whole screen and overwriting two
+ * regions.  It owns the complete background phase: save IFF2 once, mask
+ * interrupts while any routine temporarily points SP into VRAM, then let
+ * repair_horizon restore the caller's interrupt state.  With interrupts masked
+ * the ceiling can use packed PUSHes all the way to byte zero; no 4,001-byte
+ * interrupt-stack reserve or byte-at-a-time LDDR prefix is needed.
  */
 _render_asm_clear_background:
+	ld a, i
+	di
+	jp po, .Lbackground_interrupts_disabled
+	ld a, 1
+	jr .Lbackground_interrupt_state_ready
+.Lbackground_interrupts_disabled:
+	xor a, a
+.Lbackground_interrupt_state_ready:
+	ld (_render_background_restore_interrupts), a
+
 	ld iy, 0
 	add iy, sp
 
@@ -1863,25 +1825,19 @@ _render_asm_clear_background:
 	inc hl
 	ld (hl), BACKGROUND_HORIZON_COLOR
 
-	/* Fill the upper ceiling down to the interrupt-stack reserve. */
+	/* Fill the upper ceiling, leaving its two-byte PUSH remainder. */
 	ld de, BACKGROUND_CEILING_COLOR * 0x010101
 	ld b, BACKGROUND_CEILING_ITERS
 	ld c, BACKGROUND_CEILING_TAIL
 	call .Lbackground_push_runs
-
-	/*
-	 * SP now points at the first ceiling byte already written. Restore the
-	 * real stack, then propagate that byte backward through the 4,001-byte
-	 * interrupt-stack reserve exactly as GraphX does.
-	 */
+	dec sp
+	dec sp
 	ld hl, 0
 	add hl, sp
+	ld (hl), BACKGROUND_CEILING_COLOR
+	inc hl
+	ld (hl), BACKGROUND_CEILING_COLOR
 	ld sp, iy
-	push hl
-	pop de
-	dec de
-	ld bc, BACKGROUND_INTERRUPT_BYTES
-	lddr
 	ret
 
 /*
@@ -1932,6 +1888,10 @@ _render_asm_repair_horizon:
 	inc de
 	ld bc, BACKGROUND_REPAIR_BOTTOM_BYTES - 1
 	ldir
+	ld a, (_render_background_restore_interrupts)
+	or a, a
+	ret z
+	ei
 	ret
 
 	.size _render_asm_repair_horizon, .-_render_asm_repair_horizon
@@ -1947,8 +1907,8 @@ _render_asm_repair_horizon:
  *
  * A 24-bit PUSH writes three equal-color pixels at once, so each row needs
  * only 106 packed writes plus its two-byte head instead of a 319-iteration
- * overlapping LDIR. Interrupts are masked only while SP points into VRAM;
- * the caller's previous IFF2 state is restored exactly before returning.
+ * overlapping LDIR. clear_background has already masked interrupts for the
+ * whole background phase, so this hot per-line routine only saves/restores SP.
  */
 _render_asm_draw_horizontal_grid_pair:
 	call __frameset0
@@ -1980,14 +1940,6 @@ _render_asm_draw_horizontal_grid_pair:
 	add hl, de
 	ld (_render_grid_ceiling_row), hl
 
-	/*
-	 * LD A,I records IFF2 in P/V. DI itself does not alter the flags, so the
-	 * saved AF lets the epilogue distinguish an enabled caller from one that
-	 * already had interrupts disabled.
-	 */
-	ld a, i
-	di
-	push af
 	ld iy, 0
 	add iy, sp
 
@@ -2018,11 +1970,6 @@ _render_asm_draw_horizontal_grid_pair:
 	.endr
 
 	ld sp, iy
-	pop af
-	jp po, .Lhorizontal_grid_interrupts_restored
-	ei
-.Lhorizontal_grid_interrupts_restored:
-
 	pop ix
 	ret
 
@@ -2188,10 +2135,7 @@ _render_asm_transform_ray:
  * share the common epilogue with the public compatibility entry above.
  */
 _render_asm_transform_ray_state:
-	push ix
-	ld iy, (_render_ray_state + STATE_HIT)
-	ld hl, _render_ray_state + STATE_PORTAL_EXIT
-	ld (_render_transform_exit), hl
+	jp .Ltransform_ray_predecoded_state
 
 .Ltransform_ray_common:
 	/*
@@ -2392,6 +2336,143 @@ _render_asm_transform_ray_state:
 	jr nz, .Ltransform_return
 	ld a, -1
 .Ltransform_return:
+	pop ix
+	ret
+
+/*
+ * Renderer-specialized transform. The fused hit resolver stores a pointer to
+ * the portal ID's predecoded affine plan, so this path performs no direction
+ * pair lookup and no exit-direction switch. Rotation zero preserves all ray
+ * state and signed map strides, allowing the common opposite-facing case to
+ * return immediately after updating the origin.
+ */
+.Ltransform_ray_predecoded_state:
+	push ix
+	ld ix, (_render_ray_state + STATE_PORTAL_PLAN)
+	ld iy, (_render_ray_state + STATE_HIT)
+
+	/* tangent = wall_position - entry tile's tangent coordinate. */
+	ld hl, (iy + RAY_WALL_POSITION)
+	ld de, 0
+	ld a, (iy + RAY_SIDE)
+	or a, a
+	jr nz, .Lplan_tangent_x_wall
+	ld d, (iy + RAY_MAP_Y)
+	jr .Lplan_tangent_ready
+.Lplan_tangent_x_wall:
+	ld d, (iy + RAY_MAP_X)
+.Lplan_tangent_ready:
+	or a, a
+	sbc hl, de
+
+	/* Apply the exact tangent mirror, then add the exit-axis base. */
+	ld a, (ix + PLAN_FLAGS)
+	bit 7, a
+	jr z, .Lplan_tangent_oriented
+	ex de, hl
+	ld hl, 256
+	or a, a
+	sbc hl, de
+.Lplan_tangent_oriented:
+	ld de, (ix + PLAN_TANGENT_BASE)
+	add hl, de
+	ld de, (ix + PLAN_NORMAL)
+	ld a, (ix + PLAN_TANGENT_TO_X)
+	or a, a
+	jr nz, .Lplan_exit_ready
+	ex de, hl
+.Lplan_exit_ready:
+	ld (_render_ray_state + STATE_ORIGIN_X), hl
+	ld (_render_ray_state + STATE_ORIGIN_Y), de
+
+	ld a, (ix + PLAN_FLAGS)
+	and a, 3
+	jp z, .Lplan_return
+	dec a
+	jr z, .Lplan_ray_positive
+	dec a
+	jr z, .Lplan_ray_half
+
+	/* -90 degrees: (x, y) -> (y, -x). */
+	ld de, (_render_ray_state + STATE_RAY_X)
+	or a, a
+	sbc hl, hl
+	sbc hl, de
+	ld de, (_render_ray_state + STATE_RAY_Y)
+	ld (_render_ray_state + STATE_RAY_Y), hl
+	ld (_render_ray_state + STATE_RAY_X), de
+	jr .Lplan_state_axes
+
+.Lplan_ray_positive:
+	/* +90 degrees: (x, y) -> (-y, x). */
+	ld de, (_render_ray_state + STATE_RAY_Y)
+	or a, a
+	sbc hl, hl
+	sbc hl, de
+	ld de, (_render_ray_state + STATE_RAY_X)
+	ld (_render_ray_state + STATE_RAY_X), hl
+	ld (_render_ray_state + STATE_RAY_Y), de
+	jr .Lplan_state_axes
+
+.Lplan_ray_half:
+	/* 180 degrees: negate both components independently. */
+	ld de, (_render_ray_state + STATE_RAY_X)
+	or a, a
+	sbc hl, hl
+	sbc hl, de
+	ld (_render_ray_state + STATE_RAY_X), hl
+	ld de, (_render_ray_state + STATE_RAY_Y)
+	or a, a
+	sbc hl, hl
+	sbc hl, de
+	ld (_render_ray_state + STATE_RAY_Y), hl
+
+.Lplan_state_axes:
+	/* Quarter turns swap every positive axis-specific persistent value. */
+	ld a, (ix + PLAN_FLAGS)
+	and a, 1
+	jr z, .Lplan_state_steps
+	ld hl, (_render_ray_state + STATE_DELTA_X)
+	ld de, (_render_ray_state + STATE_DELTA_Y)
+	ld (_render_ray_state + STATE_DELTA_X), de
+	ld (_render_ray_state + STATE_DELTA_Y), hl
+	ld a, (_render_ray_state + STATE_ABS_X)
+	ld b, a
+	ld a, (_render_ray_state + STATE_ABS_Y)
+	ld (_render_ray_state + STATE_ABS_X), a
+	ld a, b
+	ld (_render_ray_state + STATE_ABS_Y), a
+	ld a, (_render_ray_state + STATE_ABS_X + 1)
+	ld b, a
+	ld a, (_render_ray_state + STATE_ABS_Y + 1)
+	ld (_render_ray_state + STATE_ABS_X + 1), a
+	ld a, b
+	ld (_render_ray_state + STATE_ABS_Y + 1), a
+
+.Lplan_state_steps:
+	/* Rebuild signed strides from the rotated rays; negative zero is zero. */
+	ld hl, 1
+	ld a, (_render_ray_state + STATE_RAY_X + 2)
+	bit 7, a
+	jr z, .Lplan_step_x_ready
+	ld hl, -1
+.Lplan_step_x_ready:
+	ld (_render_ray_state + STATE_MAP_STEP_X), hl
+	ld hl, 16
+	ld a, (_render_ray_state + STATE_RAY_Y + 2)
+	bit 7, a
+	jr z, .Lplan_step_y_ready
+	ld hl, -16
+.Lplan_step_y_ready:
+	ld (_render_ray_state + STATE_MAP_STEP_Y), hl
+
+	/* Translate packed code 3 back to the caller's signed -1 rotation. */
+	ld a, (ix + PLAN_FLAGS)
+	and a, 3
+	cp a, 3
+	jr nz, .Lplan_return
+	ld a, -1
+.Lplan_return:
 	pop ix
 	ret
 
@@ -2813,6 +2894,499 @@ _render_asm_draw_wall_segment:
 	ret
 
 	.size _render_asm_draw_wall_segment, .-_render_asm_draw_wall_segment
+
+	.section .text._render_asm_draw_wall_segment_registers,"ax",@progbits
+	.global _render_asm_draw_wall_segment_registers
+	.type _render_asm_draw_wall_segment_registers, @function
+
+/*
+ * Exact full-column fast entry.  Unclipped terminal walls begin at
+ * context.start and end at context.end, so texture source row zero is known
+ * and every descriptor boundary is already inside the output range.  The
+ * current source index/Y stay in BC, the boundary table stays in IX, and IY
+ * advances through the framebuffer.  Only the texture and color immediates
+ * are patched once per wall; the run loop performs no span-scratch traffic.
+ *
+ * Clipped portal-aperture walls tail-call the established general entry.
+ */
+_render_asm_draw_wall_segment_registers:
+	call __frameset0
+	ld a, (ix + 12)
+	ld b, a
+	ld a, (ix + 15)
+	cp a, b
+	jp c, .Lfast_span_return
+	jp z, .Lfast_span_return
+
+	ld iy, (ix + 18)
+	ld a, (iy + 2)
+	cp a, b
+	jp nz, .Lfast_span_fallback
+	ld a, (iy + 3)
+	ld b, (ix + 15)
+	cp a, b
+	jp nz, .Lfast_span_fallback
+
+	/* Retain the boundary base on the stack until IX's ABI args are consumed. */
+	ld hl, (iy + 4)
+	push hl
+	ld a, b
+	ld (.Lfast_span_end_compare + 1), a
+
+	ld iy, (ix + 6)
+
+	/* Select and mirror the exact 16-byte texture column. */
+	ld a, (iy + RAY_WALL_U)
+	and a, 0xF0
+	ld c, a
+	ld a, (iy + RAY_SIDE)
+	or a, a
+	jr nz, .Lfast_span_mirror_y
+	ld a, (iy + RAY_STEP_X)
+	cp a, 1
+	jr nz, .Lfast_span_mirror_done
+	jr .Lfast_span_mirror
+.Lfast_span_mirror_y:
+	bit 7, (iy + RAY_STEP_Y)
+	jr z, .Lfast_span_mirror_done
+.Lfast_span_mirror:
+	ld a, 0xF0
+	sub a, c
+	ld c, a
+.Lfast_span_mirror_done:
+
+	ld a, (iy + RAY_MAP_X)
+	xor a, (iy + RAY_MAP_Y)
+	and a, 3
+	ld b, a
+	ld hl, 0
+	ld l, c
+	ld h, a
+	ld de, _render_wall_texture_runs
+	add hl, de
+	ld (.Lfast_span_texture + 1), hl
+
+	/* Compute and patch the material/shade color bank once. */
+	ld c, b
+	ld b, (iy + RAY_SIDE)
+	ld a, (iy + RAY_DISTANCE + 2)
+	or a, a
+	jr nz, .Lfast_span_shade_far
+	ld hl, (iy + RAY_DISTANCE)
+	dec hl
+	ld a, h
+	cp a, 8
+	jr nc, .Lfast_span_shade_far
+	cp a, 4
+	jr c, .Lfast_span_shade_ready
+	inc b
+	jr .Lfast_span_shade_ready
+.Lfast_span_shade_far:
+	inc b
+	inc b
+.Lfast_span_shade_ready:
+	ld a, c
+	add a, a
+	add a, a
+	or a, b
+	ld de, 0
+	ld d, a
+	ld e, 32
+	mlt de
+	ld hl, _render_wall_colors
+	add hl, de
+	ld (.Lfast_span_colors + 1), hl
+
+	/* Draw-buffer pointer + x + exact padded row-offset lookup. */
+	ld iy, (0xE30014)
+	ld de, (ix + 9)
+	add iy, de
+	ld hl, 0
+	ld l, (ix + 12)
+	add hl, hl
+	add hl, hl
+	ld de, _render_screen_rows
+	add hl, de
+	ld de, (hl)
+	add iy, de
+
+	ld c, (ix + 12)
+	ld b, 0
+	pop ix
+
+.Lfast_span_outer:
+	/* Descriptor byte zero is a WallColor offset; byte one is the next row. */
+	ld a, b
+	add a, a
+	ld de, 0
+	ld e, a
+.Lfast_span_texture:
+	ld hl, 0
+	add hl, de
+	ld de, (hl)
+	ld a, d
+	ld b, a
+	ld a, e
+	ld de, 0
+	ld e, a
+.Lfast_span_colors:
+	ld hl, 0
+	add hl, de
+	ld hl, (hl)
+
+	/* Resolve boundary[next] in the alternate set without spilling color HL. */
+	ld a, b
+	exx
+	ld de, 0
+	ld e, a
+	lea hl, ix + 0
+	add hl, de
+	ld a, (hl)
+	exx
+
+	ld d, a
+	sub a, c
+	ld c, d
+	jp z, .Lfast_span_advance
+	push bc
+	ld de, 320
+	/* Same exact four-pixel Duff writer as the general kernel. */
+	cp a, 8
+	jr c, .Lfast_span_write_short
+	ld c, a
+	add a, 7
+	srl a
+	srl a
+	srl a
+	ld b, a
+	ld a, c
+	and a, 7
+	jr z, .Lfast_span_write_8
+	cp a, 4
+	jr c, .Lfast_span_write_low
+	jr z, .Lfast_span_write_4
+	cp a, 6
+	jr c, .Lfast_span_write_5
+	jr z, .Lfast_span_write_6
+	jr .Lfast_span_write_7
+.Lfast_span_write_low:
+	cp a, 2
+	jr c, .Lfast_span_write_1
+	jr z, .Lfast_span_write_2
+	jr .Lfast_span_write_3
+
+.Lfast_span_write_8:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lfast_span_write_7:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lfast_span_write_6:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lfast_span_write_5:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lfast_span_write_4:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lfast_span_write_3:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lfast_span_write_2:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lfast_span_write_1:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	djnz .Lfast_span_write_8
+	jr .Lfast_span_write_done
+
+.Lfast_span_write_short:
+	srl a
+	ld b, a
+	jr z, .Lfast_span_write_short_single
+	jr nc, .Lfast_span_write_short_pairs
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lfast_span_write_short_pairs:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	djnz .Lfast_span_write_short_pairs
+	jr .Lfast_span_write_done
+.Lfast_span_write_short_single:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lfast_span_write_done:
+	pop bc
+
+.Lfast_span_advance:
+	ld a, c
+.Lfast_span_end_compare:
+	cp a, 0
+	jp nz, .Lfast_span_outer
+.Lfast_span_return:
+	pop ix
+	ret
+
+.Lfast_span_fallback:
+	pop ix
+	jp _render_asm_draw_wall_segment
+
+	.size _render_asm_draw_wall_segment_registers, .-_render_asm_draw_wall_segment_registers
+
+	.section .text._render_asm_draw_wall_segment_prepacked,"ax",@progbits
+	.global _render_asm_draw_wall_segment_prepacked
+	.type _render_asm_draw_wall_segment_prepacked, @function
+
+/*
+ * Exact full-column 8 KiB prepacked-run entry.  Each four-byte record is
+ * {next source row, palette, palette, palette}, indexed by
+ * material/shade/texture-column/source-row.  This folds the descriptor and
+ * shaded-color lookups into one address calculation per texture run.
+ * Clipped portal-aperture walls tail-call the established general entry.
+ */
+_render_asm_draw_wall_segment_prepacked:
+	call __frameset0
+	ld a, (ix + 12)
+	ld b, a
+	ld a, (ix + 15)
+	cp a, b
+	jp c, .Lpacked_span_return
+	jp z, .Lpacked_span_return
+
+	ld iy, (ix + 18)
+	ld a, (iy + 2)
+	cp a, b
+	jp nz, .Lpacked_span_fallback
+	ld a, (iy + 3)
+	ld b, (ix + 15)
+	cp a, b
+	jp nz, .Lpacked_span_fallback
+
+	ld hl, (iy + 4)
+	push hl
+	ld a, b
+	ld (.Lpacked_span_end_compare + 1), a
+
+	ld iy, (ix + 6)
+
+	/* Select and mirror the exact 16-byte texture column. */
+	ld a, (iy + RAY_WALL_U)
+	and a, 0xF0
+	ld c, a
+	ld a, (iy + RAY_SIDE)
+	or a, a
+	jr nz, .Lpacked_span_mirror_y
+	ld a, (iy + RAY_STEP_X)
+	cp a, 1
+	jr nz, .Lpacked_span_mirror_done
+	jr .Lpacked_span_mirror
+.Lpacked_span_mirror_y:
+	bit 7, (iy + RAY_STEP_Y)
+	jr z, .Lpacked_span_mirror_done
+.Lpacked_span_mirror:
+	ld a, 0xF0
+	sub a, c
+	ld c, a
+.Lpacked_span_mirror_done:
+	ld a, c
+	ld (.Lpacked_span_column + 1), a
+
+	/* Preserve material in C while deriving the exact four-level shade. */
+	ld a, (iy + RAY_MAP_X)
+	xor a, (iy + RAY_MAP_Y)
+	and a, 3
+	ld c, a
+	ld b, (iy + RAY_SIDE)
+	ld a, (iy + RAY_DISTANCE + 2)
+	or a, a
+	jr nz, .Lpacked_span_shade_far
+	ld hl, (iy + RAY_DISTANCE)
+	dec hl
+	ld a, h
+	cp a, 8
+	jr nc, .Lpacked_span_shade_far
+	cp a, 4
+	jr c, .Lpacked_span_shade_ready
+	inc b
+	jr .Lpacked_span_shade_ready
+.Lpacked_span_shade_far:
+	inc b
+	inc b
+.Lpacked_span_shade_ready:
+	/* ((material * 4 + shade) * 512) + texture_column * 32. */
+	ld a, c
+	add a, a
+	add a, a
+	or a, b
+	ld hl, 0
+	ld h, a
+.Lpacked_span_column:
+	ld l, 0
+	add hl, hl
+	ld de, _render_wall_prepacked_runs
+	add hl, de
+	ld (.Lpacked_span_table + 1), hl
+
+	/* Draw-buffer pointer + x + exact padded row-offset lookup. */
+	ld iy, (0xE30014)
+	ld de, (ix + 9)
+	add iy, de
+	ld hl, 0
+	ld l, (ix + 12)
+	add hl, hl
+	add hl, hl
+	ld de, _render_screen_rows
+	add hl, de
+	ld de, (hl)
+	add iy, de
+
+	ld c, (ix + 12)
+	ld b, 0
+	pop ix
+
+.Lpacked_span_outer:
+	/* Four-byte record: next source row followed by packed palette bytes. */
+	ld a, b
+	add a, a
+	add a, a
+	ld de, 0
+	ld e, a
+.Lpacked_span_table:
+	ld hl, 0
+	add hl, de
+	ld b, (hl)
+	inc hl
+	ld hl, (hl)
+
+	/* Resolve boundary[next] in the alternate set without spilling color HL. */
+	ld a, b
+	exx
+	ld de, 0
+	ld e, a
+	lea hl, ix + 0
+	add hl, de
+	ld a, (hl)
+	exx
+
+	ld d, a
+	sub a, c
+	ld c, d
+	jp z, .Lpacked_span_advance
+	push bc
+	ld de, 320
+	cp a, 8
+	jr c, .Lpacked_span_write_short
+	ld c, a
+	add a, 7
+	srl a
+	srl a
+	srl a
+	ld b, a
+	ld a, c
+	and a, 7
+	jr z, .Lpacked_span_write_8
+	cp a, 4
+	jr c, .Lpacked_span_write_low
+	jr z, .Lpacked_span_write_4
+	cp a, 6
+	jr c, .Lpacked_span_write_5
+	jr z, .Lpacked_span_write_6
+	jr .Lpacked_span_write_7
+.Lpacked_span_write_low:
+	cp a, 2
+	jr c, .Lpacked_span_write_1
+	jr z, .Lpacked_span_write_2
+	jr .Lpacked_span_write_3
+
+.Lpacked_span_write_8:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lpacked_span_write_7:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lpacked_span_write_6:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lpacked_span_write_5:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lpacked_span_write_4:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lpacked_span_write_3:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lpacked_span_write_2:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lpacked_span_write_1:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	djnz .Lpacked_span_write_8
+	jr .Lpacked_span_write_done
+
+.Lpacked_span_write_short:
+	srl a
+	ld b, a
+	jr z, .Lpacked_span_write_short_single
+	jr nc, .Lpacked_span_write_short_pairs
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lpacked_span_write_short_pairs:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+	djnz .Lpacked_span_write_short_pairs
+	jr .Lpacked_span_write_done
+.Lpacked_span_write_short_single:
+	ld (iy), hl
+	ld (iy + 3), l
+	add iy, de
+.Lpacked_span_write_done:
+	pop bc
+
+.Lpacked_span_advance:
+	ld a, c
+.Lpacked_span_end_compare:
+	cp a, 0
+	jp nz, .Lpacked_span_outer
+.Lpacked_span_return:
+	pop ix
+	ret
+
+.Lpacked_span_fallback:
+	pop ix
+	jp _render_asm_draw_wall_segment
+
+	.size _render_asm_draw_wall_segment_prepacked, .-_render_asm_draw_wall_segment_prepacked
 
 	.section .text._render_asm_draw_solid_segment,"ax",@progbits
 	.global _render_asm_draw_solid_segment
@@ -3411,6 +3985,9 @@ _render_grid_clip_floor_result:
 	.local _render_grid_clip_ceiling_result
 _render_grid_clip_ceiling_result:
 	.zero 1
+	.local _render_background_restore_interrupts
+_render_background_restore_interrupts:
+	.zero 1
 	.local _render_span_texture
 _render_span_texture:
 	.zero 3
@@ -3472,9 +4049,12 @@ _render_portal_bottom_start:
 	.extern _render_wall_map
 	.extern _render_wall_texture_runs
 	.extern _render_wall_colors
+	.extern _render_wall_prepacked_runs
 	.extern _render_screen_rows
 	.extern _render_builtin_portal_by_tile
 	.extern _render_builtin_portals
+	.extern _render_portal_faces
+	.extern _render_portal_transform_plans
 	.extern _render_portal_profile_by_u
 	.extern _render_reciprocal_delta
 	.extern _render_grid_near_projection
