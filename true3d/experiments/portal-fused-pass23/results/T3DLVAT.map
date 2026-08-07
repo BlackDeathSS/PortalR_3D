@@ -1,0 +1,462 @@
+
+Merging object attributes
+
+
+Discarded input sections
+
+ .comment       0x00000000      0x1bd obj/live-benchmark-autotest/T3DLVAT.o
+ .note.GNU-stack
+                0x00000000        0x0 obj/live-benchmark-autotest/T3DLVAT.o
+ .init.weak_crt
+                0x00000000       0x10 obj/live-benchmark-autotest/T3DLVAT.o
+ .text          0x00000000        0x0 obj/live-benchmark-autotest/crt0.o
+ .data          0x00000000        0x0 obj/live-benchmark-autotest/crt0.o
+ .bss           0x00000000        0x0 obj/live-benchmark-autotest/crt0.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+prgm             0x00d1a87f         0x00400000
+bss              0x00d052c6         0x0000ed12
+*default*        0x00000000         0xffffffff
+
+Linker script and memory map
+
+                0x00d1a87f                        LOAD_ADDR = 0xd1a87f
+                0x00d052c6                        BSSHEAP_LOW = 0xd052c6
+                0x00d13fd8                        BSSHEAP_HIGH = 0xd13fd8
+                0x00d1a87e                        STACK_HIGH = 0xd1a87e
+                0x00000001                        __TICE__ = 0x1
+                0x00d1a87f                        . = LOAD_ADDR
+
+.header         0x00d1a87f       0x27
+ *(.header)
+ .header        0x00d1a87f        0x3 obj/live-benchmark-autotest/crt0.o
+ *(.header.icon)
+ .header.icon   0x00d1a882       0x24 obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1a887                ___description
+
+.init           0x00d1a8a6      0x12c
+ *(.init)
+ .init          0x00d1a8a6      0x12c obj/live-benchmark-autotest/crt0.o
+                0x00d1a8a6                __start
+                0x00d1a903                __libload_library_FILEIOC
+                0x00d1a90d                _ti_Open
+                0x00d1a911                _ti_Close
+                0x00d1a915                _ti_Delete
+                0x00d1a919                _ti_Resize
+                0x00d1a91d                _ti_GetSize
+                0x00d1a921                _ti_GetDataPtr
+                0x00d1a925                _ti_Rename
+                0x00d1a929                __libload_library_GRAPHX
+                0x00d1a932                _gfx_Begin
+                0x00d1a936                _gfx_End
+                0x00d1a93a                _gfx_SetDraw
+                0x00d1a93e                _gfx_SwapDraw
+                0x00d1a942                _gfx_Wait
+                0x00d1a996                ___exithl
+                0x00d1a997                _exit.sp
+
+.text           0x00d1a9d2     0xae36
+ *(.text.unlikely .text.*_unlikely .text.unlikely.*)
+ *(.text.exit .text.exit.*)
+ *(.text.startup .text.startup.*)
+ *(.text.hot .text.hot.*)
+ *(SORT_BY_NAME(.text.sorted.*))
+ *(.text .stub .text.* .gnu.linkonce.t.*)
+ .text          0x00d1a9d2      0x4f9 obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1a9d2                _present_low_frame_fast
+                0x00d1acfa                _present_low_frame_32_fast
+                0x00d1ad40                __frameset
+                0x00d1ad4e                __frameset0
+                0x00d1ad59                __ishrs_1
+                0x00d1ad67                __ishru_1
+                0x00d1ad75                __llmulu
+                0x00d1adca                __llshru
+                0x00d1adfa                __llshrs
+                0x00d1ae36                _atomic_load_decreasing_32
+                0x00d1ae5b                _atomic_load_increasing_32
+                0x00d1ae80                _clock
+                0x00d1ae8b                _memcpy
+                0x00d1aeac                _memset
+ .text._engine_render_benchmark_begin
+                0x00d1aecb       0x67 obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1aecb                _engine_render_benchmark_begin
+ .text._engine_render_benchmark_end
+                0x00d1af32       0xcf obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1af32                _engine_render_benchmark_end
+ .text._engine_render_benchmark_calibrate
+                0x00d1b001      0x29d obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1b001                _engine_render_benchmark_calibrate
+ .text._engine_render_benchmark_logical_hash
+                0x00d1b29e       0xbc obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1b29e                _engine_render_benchmark_logical_hash
+ .text._engine_init
+                0x00d1b35a      0x4fe obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1b35a                _engine_init
+ .text._room_face_holds_portal
+                0x00d1b858       0xec obj/live-benchmark-autotest/T3DLVAT.o
+ .text._configure_portal_on_face
+                0x00d1b944      0x37a obj/live-benchmark-autotest/T3DLVAT.o
+ .text._rebuild_camera_basis
+                0x00d1bcbe      0x160 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._collide_with_room
+                0x00d1be1e      0x1ac obj/live-benchmark-autotest/T3DLVAT.o
+ .text._angle_sine
+                0x00d1bfca       0x57 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._engine_graphics_init
+                0x00d1c021      0x280 obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1c021                _engine_graphics_init
+ .text._configure_render_mode
+                0x00d1c2a1       0xcf obj/live-benchmark-autotest/T3DLVAT.o
+ .text._engine_update
+                0x00d1c370     0x153a obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1c370                _engine_update
+ .text._place_portal
+                0x00d1d8aa      0x401 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._transform_portal_point
+                0x00d1dcab       0xe6 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._transform_portal_vector
+                0x00d1dd91      0x1fa obj/live-benchmark-autotest/T3DLVAT.o
+ .text._add_signed_axis
+                0x00d1df8b       0x97 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._engine_render
+                0x00d1e022      0x8f9 obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d1e022                _engine_render
+ .text._render_camera
+                0x00d1e91b     0x1e1b obj/live-benchmark-autotest/T3DLVAT.o
+ .text._clear_render_layer
+                0x00d20736       0xdb obj/live-benchmark-autotest/T3DLVAT.o
+ .text._render_room_faces_immediate
+                0x00d20811      0xb85 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._prepare_room_geometry
+                0x00d21396      0x40e obj/live-benchmark-autotest/T3DLVAT.o
+ .text._prepare_face_polygon
+                0x00d217a4      0x2ab obj/live-benchmark-autotest/T3DLVAT.o
+ .text._rasterize_polygon
+                0x00d21a4f      0x8c1 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._camera_axis_scaled
+                0x00d22310      0x183 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._intersect_near_plane
+                0x00d22493      0x15e obj/live-benchmark-autotest/T3DLVAT.o
+ .text._project_camera_point
+                0x00d225f1      0x17b obj/live-benchmark-autotest/T3DLVAT.o
+ .text._polygon_intersects_layer
+                0x00d2276c      0x263 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._fill_polygon_color_rows
+                0x00d229cf      0x536 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._half_projected
+                0x00d22f05        0xe obj/live-benchmark-autotest/T3DLVAT.o
+ .text._raster_chain_begin_edge
+                0x00d22f13      0x25e obj/live-benchmark-autotest/T3DLVAT.o
+ .text._bind_level
+                0x00d23171      0x2b0 obj/live-benchmark-autotest/T3DLVAT.o
+ .text._true3d_live_benchmark_run
+                0x00d23421     0x20a6 obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d23421                _true3d_live_benchmark_run
+ .text._live_state_hash
+                0x00d254c7      0x13a obj/live-benchmark-autotest/T3DLVAT.o
+ .text._main    0x00d25601        0x9 obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d25601                _main
+ .text._transform_point_exact
+                0x00d2560a      0x13e obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d2560a                _transform_point_exact
+ .text._scale_camera_room_edges_exact
+                0x00d25748       0xc0 obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d25748                _scale_camera_room_edges_exact
+ *(.gnu.warning)
+
+.rodata         0x00d25808      0x407
+ *(.rodata .rodata.* .gnu.linkonce.r.*)
+ .rodata._base_palette_rgb
+                0x00d25808       0x27 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._shade_numerator
+                0x00d2582f        0x4 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._box_face_vertices
+                0x00d25833       0x18 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._face_normals
+                0x00d2584b       0x36 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._face_right_vectors
+                0x00d25881       0x36 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._face_up_vectors
+                0x00d258b7       0x36 obj/live-benchmark-autotest/T3DLVAT.o
+ *fill*         0x00d258ed        0x1 
+ .rodata._quarter_sine
+                0x00d258ee       0x82 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._face_light_level
+                0x00d25970        0x6 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._draw_hud.freecam_glyphs
+                0x00d25976        0x7 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata.___const.draw_hud.fps_glyphs
+                0x00d2597d        0x9 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._hud_glyph_rows
+                0x00d25986       0x69 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._hud_left_pixel
+                0x00d259ef        0x8 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._hud_middle_pixel
+                0x00d259f7        0x8 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._hud_right_pixel
+                0x00d259ff        0x8 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._builtin_level
+                0x00d25a07       0x42 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.3
+                0x00d25a49       0x21 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.1.4
+                0x00d25a6a       0x15 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.2
+                0x00d25a7f        0x7 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._live_route
+                0x00d25a86       0x93 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.3.5
+                0x00d25b19       0x18 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.4
+                0x00d25b31        0xe obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.5
+                0x00d25b3f        0x8 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.6
+                0x00d25b47        0x3 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.7
+                0x00d25b4a        0x2 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._live_sections
+                0x00d25b4c       0x28 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.8
+                0x00d25b74        0x9 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.9
+                0x00d25b7d        0xc obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.10
+                0x00d25b89        0xb obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.11
+                0x00d25b94        0xc obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.12
+                0x00d25ba0        0xb obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.13
+                0x00d25bab        0xa obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.14
+                0x00d25bb5        0xc obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.15
+                0x00d25bc1        0xd obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.16
+                0x00d25bce        0xc obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.17
+                0x00d25bda        0xb obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata._.str.18
+                0x00d25be5        0x8 obj/live-benchmark-autotest/T3DLVAT.o
+ .rodata.libload
+                0x00d25bed       0x22 obj/live-benchmark-autotest/crt0.o
+
+.init_array     0x00d25c0f        0x0
+                [!provide]                        PROVIDE (__init_array_start = .)
+ *(.preinit_array)
+ *(SORT_BY_INIT_PRIORITY(.init_array.*))
+ *(.init_array)
+                [!provide]                        PROVIDE (__init_array_end = .)
+
+.fini_array     0x00d25c0f        0x0
+                [!provide]                        PROVIDE (__fini_array_start = .)
+ *(SORT_BY_INIT_PRIORITY(.fini_array.*))
+ *(.fini_array)
+                [!provide]                        PROVIDE (__fini_array_end = .)
+                0x00d25c0f                        ___data_low = .
+
+.data           0x00d25c0f       0x5c
+ *(.data .data.* .gnu.linkonce.d.*)
+ .data._portals
+                0x00d25c0f       0x5c obj/live-benchmark-autotest/T3DLVAT.o
+ *(.data1)
+                0x00d25c6b                        ___runprgm_reloc_start = .
+ *(.runprgm.reloc)
+                0x00d25c6b                        ___runprgm_reloc_end = .
+                0x00d25c6b                        ___data_high = .
+                0x0000005c                        ___data_len = (___data_high - ___data_low)
+                0x00d052c6                        . = BSSHEAP_LOW
+                0x00d052c6                        ___bss_low = .
+
+.bss            0x00d052c6     0x7e90
+ *(.dynbss)
+ *(.bss .bss.* .gnu.linkonce.b.*)
+ .bss._render_benchmark_active
+                0x00d052c6        0x1 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._render_benchmark_last
+                0x00d052c7        0x4 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._render_benchmark_category
+                0x00d052cb        0x1 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._render_benchmark
+                0x00d052cc       0x56 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._portal_lod_state
+                0x00d05322        0x2 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._active_render_width
+                0x00d05324        0x1 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._active_render_height
+                0x00d05325        0x1 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._low_frame
+                0x00d05326      0xc02 obj/live-benchmark-autotest/T3DLVAT.o
+                0x00d05326                _low_frame
+ .bss._projection_scale_table
+                0x00d05f28     0x4000 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._far_projection_scale_table
+                0x00d09f28     0x1000 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._edge_reciprocal_table
+                0x00d0af28     0x1000 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._render_layers
+                0x00d0bf28      0xabc obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._active_render_shift
+                0x00d0c9e4        0x1 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._room_count
+                0x00d0c9e5        0x1 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._rooms    0x00d0c9e6       0x68 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._world_vertices
+                0x00d0ca4e      0x180 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._world_faces
+                0x00d0cbce      0x120 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._active_horizon_near_limit
+                0x00d0ccee        0x1 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._active_horizon_far_limit
+                0x00d0ccef        0x1 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._low_row_offsets
+                0x00d0ccf0       0x60 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._camera_vertices
+                0x00d0cd50       0x48 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._vertex_projectable
+                0x00d0cd98        0x8 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._screen_vertices
+                0x00d0cda0       0x30 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._portal_lod_frame
+                0x00d0cdd0      0x300 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._clip_output
+                0x00d0d0d0       0x48 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._live_level
+                0x00d0d118        0x6 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._live_report_handle
+                0x00d0d11e        0x1 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._live_report
+                0x00d0d11f        0x3 obj/live-benchmark-autotest/T3DLVAT.o
+ .bss._live_state
+                0x00d0d122       0x34 obj/live-benchmark-autotest/T3DLVAT.o
+ *(COMMON)
+                0x00d0d156                        ___bss_high = .
+                0x00007e90                        ___bss_len = (___bss_high - ___bss_low)
+                0x00000001                        ASSERT ((. <= BSSHEAP_HIGH), Error: BSS exceed BSSHEAP_HIGH limit)
+                0x00d0d156                        ___heap_low = .
+                0x00d13fd8                        . = BSSHEAP_HIGH
+                0x00d13fd8                        ___heap_high = .
+
+.runprgm
+ *(.runprgm.reloc)
+
+.debug_info
+ *(.debug_info .debug_info.*)
+
+.debug_abbrev
+ *(.debug_abbrev .debug_abbrev.*)
+
+.debug_line
+ *(.debug_line .debug_line.*)
+
+.debug_line_str
+ *(.debug_line_str .debug_line_str.*)
+
+.debug_str
+ *(.debug_str .debug_str.*)
+
+.debug_str_offsets
+ *(.debug_str_offsets .debug_str_offsets.*)
+
+.debug_addr
+ *(.debug_addr .debug_addr.*)
+
+.debug_aranges
+ *(.debug_aranges .debug_aranges.*)
+
+.debug_ranges
+ *(.debug_ranges .debug_ranges.*)
+
+.debug_rnglists
+ *(.debug_rnglists .debug_rnglists.*)
+
+.debug_loc
+ *(.debug_loc .debug_loc.*)
+
+.debug_loclists
+ *(.debug_loclists .debug_loclists.*)
+
+.debug_frame
+ *(.debug_frame .debug_frame.*)
+
+.debug_macro
+ *(.debug_macro .debug_macro.*)
+
+.debug_macinfo
+ *(.debug_macinfo .debug_macinfo.*)
+
+.debug_names
+ *(.debug_names .debug_names.*)
+
+.debug_pubnames
+ *(.debug_pubnames .debug_pubnames.*)
+
+.debug_pubtypes
+ *(.debug_pubtypes .debug_pubtypes.*)
+
+.debug_types
+ *(.debug_types .debug_types.*)
+
+.debug_sup
+ *(.debug_sup .debug_sup.*)
+
+.debug_cu_index
+ *(.debug_cu_index .debug_cu_index.*)
+
+.debug_tu_index
+ *(.debug_tu_index .debug_tu_index.*)
+
+.gdb_index
+ *(.gdb_index)
+
+.debug_gdb_scripts
+ *(.debug_gdb_scripts)
+
+.debug_abbrev.dwo
+ *(.debug_abbrev.dwo .debug_abbrev.dwo.*)
+
+.debug_info.dwo
+ *(.debug_info.dwo .debug_info.dwo.*)
+
+.debug_line.dwo
+ *(.debug_line.dwo .debug_line.dwo.*)
+
+.debug_loclists.dwo
+ *(.debug_loclists.dwo .debug_loclists.dwo.*)
+
+.debug_macro.dwo
+ *(.debug_macro.dwo .debug_macro.dwo.*)
+
+.debug_rnglists.dwo
+ *(.debug_rnglists.dwo .debug_rnglists.dwo.*)
+
+.debug_str.dwo
+ *(.debug_str.dwo .debug_str.dwo.*)
+
+.debug_str_offsets.dwo
+ *(.debug_str_offsets.dwo .debug_str_offsets.dwo.*)
+
+.eh_frame
+ *(.eh_frame)
+
+.eh_frame_hdr
+ *(.eh_frame_hdr)
+
+/DISCARD/
+ *(.comment)
+ *(.note*)
+                [!provide]                        PROVIDE (___runprgm_reloc_len = (___runprgm_reloc_end - ___runprgm_reloc_start))
+LOAD obj/live-benchmark-autotest/T3DLVAT.o
+LOAD obj/live-benchmark-autotest/crt0.o
+START GROUP
+LOAD C:/CEdev/lib/libc/allocator_standard.a
+LOAD C:/CEdev/lib/crt/libcrt_os.a
+LOAD C:/CEdev/lib/ce/libce.a
+LOAD C:/CEdev/lib/softfloat/libsoftfloat.a
+LOAD C:/CEdev/lib/libc/libc_os.a
+LOAD C:/CEdev/lib/libcxx/libcxx.a
+END GROUP
+OUTPUT(bin/T3DLVAT.obj elf32-z80)

@@ -3,6 +3,13 @@
 #include <graphx.h>
 #include <limits.h>
 #include <string.h>
+#if TRUE3D_RENDER_BENCHMARK
+#include <sys/timers.h>
+#endif
+
+#ifndef TRUE3D_BENCHMARK_COUNTERS
+#define TRUE3D_BENCHMARK_COUNTERS 0
+#endif
 
 #define FIXED_SHIFT 8
 #define FIXED_ONE ((fixed_t)1 << FIXED_SHIFT)
@@ -19,6 +26,8 @@
 #define PROJECTED_LIMIT 1048576L
 #define PROJECTION_TABLE_SHIFT 2
 #define PROJECTION_TABLE_SIZE 2048
+#define NEAR_PROJECTION_DEPTH_COUNT \
+    (PROJECTION_TABLE_SIZE << PROJECTION_TABLE_SHIFT)
 #define FAR_PROJECTION_TABLE_SHIFT 5
 #define PROJECTION_SCALE_SHIFT 6
 #define EDGE_RECIPROCAL_SHIFT 4
@@ -141,10 +150,30 @@ typedef struct {
     fixed_t depth;
 } CameraPoint;
 
+void transform_point_exact(
+    const Camera *camera,
+    const Vec3 *point,
+    CameraPoint *result
+);
+void scale_camera_room_edges_exact(
+    const Camera *camera,
+    fixed_t extent_x,
+    fixed_t extent_y,
+    fixed_t extent_z,
+    CameraPoint *result
+);
+
 typedef struct {
     int24_t x;
     int24_t y;
 } ScreenPoint;
+
+void project_camera_xy_exact(
+    const CameraPoint *point,
+    uint24_t scale,
+    ScreenPoint *result,
+    uint8_t render_shift
+);
 
 typedef struct {
     ScreenPoint point[MAX_POLYGON_VERTICES];
@@ -157,6 +186,9 @@ typedef struct {
     uint8_t face_offset;
     uint8_t first_row;
     uint8_t last_row;
+    int16_t sample_first_row;
+    int16_t sample_last_row;
+    uint8_t top_vertex;
 } DrawPolygon;
 
 typedef struct {
@@ -270,16 +302,13 @@ static Portal portals[PORTAL_COUNT] = {
     }
 };
 
-static CameraPoint camera_vertices[MAX_WORLD_VERTICES];
-static ScreenPoint screen_vertices[MAX_WORLD_VERTICES];
-static uint8_t vertex_projectable[MAX_WORLD_VERTICES];
-static CameraPoint clip_input[MAX_POLYGON_VERTICES];
+static CameraPoint camera_vertices[8];
+static ScreenPoint screen_vertices[8];
+static uint8_t vertex_projectable[8];
 static CameraPoint clip_output[MAX_POLYGON_VERTICES];
 static RenderLayer render_layers[RENDER_LAYER_COUNT];
-static int24_t span_left[RENDER_HEIGHT];
-static int24_t span_right[RENDER_HEIGHT];
 static uint16_t low_row_offsets[RENDER_HEIGHT];
-static uint16_t projection_scale_table[PROJECTION_TABLE_SIZE];
+static uint16_t projection_scale_table[NEAR_PROJECTION_DEPTH_COUNT];
 static uint16_t far_projection_scale_table[PROJECTION_TABLE_SIZE];
 static uint16_t edge_reciprocal_table[EDGE_RECIPROCAL_SIZE];
 static uint8_t portal_lod_frame[PORTAL_LOD_STRIDE * PORTAL_LOD_HEIGHT];
@@ -291,13 +320,161 @@ static uint8_t active_horizon_near_limit;
 static uint8_t active_horizon_far_limit;
 LowFrame low_frame;
 
+#if TRUE3D_RENDER_BENCHMARK
+static True3DRenderBenchmark render_benchmark;
+static uint32_t render_benchmark_last;
+static uint8_t render_benchmark_category;
+static uint8_t render_benchmark_active;
+
+static inline __attribute__((always_inline)) uint24_t
+render_benchmark_timer_direct(void) {
+    return *(volatile uint24_t *)0xF20020;
+}
+
+static inline __attribute__((always_inline)) uint32_t
+render_benchmark_timer(void) {
+    uint24_t first = render_benchmark_timer_direct();
+    uint24_t second = render_benchmark_timer_direct();
+
+    if ((uint24_t)(second - first) <= 1u) return second;
+    {
+        uint24_t third = render_benchmark_timer_direct();
+
+        if ((uint24_t)(third - second) <= 1u) return third;
+    }
+    return first;
+}
+
+static inline __attribute__((always_inline)) void
+render_benchmark_charge(uint32_t now) {
+    uint32_t elapsed = now - render_benchmark_last;
+
+    render_benchmark.raw_ticks[render_benchmark_category] += elapsed;
+    render_benchmark.total_ticks += elapsed;
+    render_benchmark_last = now;
+}
+
+static inline __attribute__((always_inline)) void
+render_benchmark_switch(True3DBenchmarkCategory category) {
+    uint32_t now;
+
+    if (!render_benchmark_active ||
+        render_benchmark_category == (uint8_t)category) {
+        return;
+    }
+    now = render_benchmark_timer();
+    render_benchmark_charge(now);
+    render_benchmark_category = (uint8_t)category;
+    ++render_benchmark.entries[category];
+}
+
+void engine_render_benchmark_reset(void) {
+    render_benchmark_active = 0;
+    render_benchmark_last = 0;
+    render_benchmark_category = TRUE3D_BENCH_ADMIN;
+    memset(&render_benchmark, 0, sizeof(render_benchmark));
+}
+
+void engine_render_benchmark_begin(void) {
+    if (render_benchmark_active) return;
+    render_benchmark_category = TRUE3D_BENCH_ADMIN;
+    render_benchmark_last = render_benchmark_timer();
+    render_benchmark_active = 1;
+}
+
+void engine_render_benchmark_end(void) {
+    if (!render_benchmark_active) return;
+    render_benchmark_charge(render_benchmark_timer());
+    render_benchmark_active = 0;
+}
+
+uint32_t engine_render_benchmark_calibrate(void) {
+    True3DRenderBenchmark saved_benchmark;
+    uint32_t saved_last;
+    uint32_t best = 0xFFFFFFFFUL;
+    uint8_t saved_category;
+    uint8_t saved_active;
+    uint8_t batch;
+
+    if (render_benchmark_active) return 0;
+    saved_benchmark = render_benchmark;
+    saved_last = render_benchmark_last;
+    saved_category = render_benchmark_category;
+    saved_active = render_benchmark_active;
+    for (batch = 0; batch < 8; ++batch) {
+        uint8_t transition;
+        uint32_t elapsed;
+
+        engine_render_benchmark_reset();
+        engine_render_benchmark_begin();
+        for (transition = 0; transition < 64; ++transition) {
+            render_benchmark_switch((transition & 1u) != 0 ?
+                TRUE3D_BENCH_SETUP : TRUE3D_BENCH_ADMIN);
+        }
+        engine_render_benchmark_end();
+        elapsed = render_benchmark.total_ticks;
+        if (elapsed < best) best = elapsed;
+    }
+    render_benchmark = saved_benchmark;
+    render_benchmark_last = saved_last;
+    render_benchmark_category = saved_category;
+    render_benchmark_active = saved_active;
+    return (best << 8) / 65u;
+}
+
+const True3DRenderBenchmark *engine_render_benchmark_read(void) {
+    return &render_benchmark;
+}
+
+uint8_t engine_render_benchmark_lod_state(void) {
+    return (uint8_t)(
+        (portal_lod_state[0] & 3u) |
+        ((portal_lod_state[1] & 3u) << 2)
+    );
+}
+
+uint32_t engine_render_benchmark_logical_hash(void) {
+    uint32_t hash = 2166136261UL;
+    uint16_t size = (uint16_t)active_render_width * active_render_height;
+    uint16_t index;
+
+    hash ^= active_render_width;
+    hash *= 16777619UL;
+    hash ^= active_render_height;
+    hash *= 16777619UL;
+    for (index = 0; index < size; ++index) {
+        hash ^= low_frame.data[index];
+        hash *= 16777619UL;
+    }
+    return hash;
+}
+
+#define RENDER_BENCHMARK_SWITCH(category) do { \
+    if (render_benchmark_active) render_benchmark_switch(category); \
+} while (0)
+#if TRUE3D_BENCHMARK_COUNTERS
+#define RENDER_BENCHMARK_COUNT(field, amount) do { \
+    if (render_benchmark_active) { \
+        render_benchmark.field = (uint16_t)( \
+            render_benchmark.field + (uint16_t)(amount) \
+        ); \
+    } \
+} while (0)
+#else
+#define RENDER_BENCHMARK_COUNT(field, amount) ((void)0)
+#endif
+#else
+#define RENDER_BENCHMARK_SWITCH(category) ((void)0)
+#define RENDER_BENCHMARK_COUNT(field, amount) ((void)0)
+#endif
+
 void present_low_frame_fast(void);
 void present_low_frame_32_fast(void);
 
 _Static_assert(
-    sizeof(camera_vertices) + sizeof(screen_vertices) +
-        sizeof(vertex_projectable) + sizeof(clip_input) + sizeof(clip_output) +
-        sizeof(render_layers) + sizeof(span_left) + sizeof(span_right) +
+        sizeof(camera_vertices) + sizeof(screen_vertices) +
+        sizeof(vertex_projectable) + sizeof(clip_output) +
+        sizeof(render_layers) +
         sizeof(low_frame) + sizeof(portal_lod_frame) + sizeof(low_row_offsets) +
         sizeof(portal_lod_state) +
         sizeof(active_render_width) + sizeof(active_render_height) +
@@ -305,8 +482,8 @@ _Static_assert(
         sizeof(active_horizon_far_limit) +
         sizeof(projection_scale_table) + sizeof(far_projection_scale_table) +
         sizeof(edge_reciprocal_table) +
-        sizeof(world_vertices) + sizeof(world_faces) + sizeof(rooms) < 28u * 1024u,
-    "True-3D render scratch exceeded 28 KiB"
+        sizeof(world_vertices) + sizeof(world_faces) + sizeof(rooms) < 40u * 1024u,
+    "True-3D render scratch exceeded 40 KiB"
 );
 
 static fixed_t fixed_mul(fixed_t left, fixed_t right) {
@@ -382,14 +559,6 @@ static void add_signed_axis(Vec3 *vector, Vec3 axis, fixed_t amount) {
     }
 }
 
-static fixed_t vec_dot(Vec3 left, Vec3 right) {
-    return (fixed_t)(
-        ((int32_t)left.x * right.x +
-         (int32_t)left.y * right.y +
-         (int32_t)left.z * right.z) >> FIXED_SHIFT
-    );
-}
-
 static Vec3 world_vertex(uint8_t index) {
     Vec3 result = {
         world_vertices[index].x,
@@ -400,12 +569,9 @@ static Vec3 world_vertex(uint8_t index) {
 }
 
 static CameraPoint transform_point(const Camera *camera, Vec3 point) {
-    Vec3 relative = vec_subtract(point, camera->position);
-    CameraPoint result = {
-        vec_dot(relative, camera->right),
-        vec_dot(relative, camera->up),
-        vec_dot(relative, camera->forward)
-    };
+    CameraPoint result;
+
+    transform_point_exact(camera, &point, &result);
     return result;
 }
 
@@ -422,36 +588,20 @@ static __attribute__((noinline)) int24_t half_projected(int24_t value) {
 static uint16_t projection_scale_for_depth(fixed_t depth) {
     uint24_t index;
 
-    if (depth >= (fixed_t)(PROJECTION_TABLE_SIZE << PROJECTION_TABLE_SHIFT)) {
+    if (depth >= (fixed_t)NEAR_PROJECTION_DEPTH_COUNT) {
         index = (uint24_t)depth >> FAR_PROJECTION_TABLE_SHIFT;
         if (index >= PROJECTION_TABLE_SIZE) index = PROJECTION_TABLE_SIZE - 1;
         return far_projection_scale_table[index];
     }
-    index = (uint24_t)depth >> PROJECTION_TABLE_SHIFT;
-    if (index == 0) index = 1;
-    if (index >= PROJECTION_TABLE_SIZE) index = PROJECTION_TABLE_SIZE - 1;
-    return projection_scale_table[index];
+    return projection_scale_table[(uint24_t)depth];
 }
 
 static ScreenPoint project_camera_point(const CameraPoint *point) {
     uint16_t scale = projection_scale_for_depth(point->depth);
-    int24_t projected_x = clamp_projected(
-        VIEW_CENTER_X * FIXED_ONE +
-        (((int32_t)point->x * scale) >> PROJECTION_SCALE_SHIFT)
-    );
-    int24_t projected_y = clamp_projected(
-        VIEW_CENTER_Y * FIXED_ONE -
-        (((int32_t)point->y * scale) >> PROJECTION_SCALE_SHIFT)
-    );
     ScreenPoint result;
 
-    if (active_render_shift == 0) {
-        result.x = projected_x;
-        result.y = projected_y;
-    } else {
-        result.x = half_projected(projected_x);
-        result.y = half_projected(projected_y);
-    }
+    RENDER_BENCHMARK_COUNT(projected_points, 1u);
+    project_camera_xy_exact(point, scale, &result, active_render_shift);
     return result;
 }
 
@@ -492,10 +642,9 @@ static uint8_t clip_and_project(
     uint8_t index;
 
     if (source_count < 3 || source_count > MAX_POLYGON_VERTICES) return 0;
-    memcpy(clip_input, source, (size_t)source_count * sizeof(CameraPoint));
     for (index = 0; index < input_count; ++index) {
-        const CameraPoint *current = &clip_input[index];
-        const CameraPoint *previous = &clip_input[
+        const CameraPoint *current = &source[index];
+        const CameraPoint *previous = &source[
             index == 0 ? input_count - 1 : index - 1
         ];
         uint8_t current_inside = current->depth >= NEAR_PLANE;
@@ -521,8 +670,40 @@ static uint8_t clip_and_project(
     return 1;
 }
 
+/* Room vertices have already been projected once. During near clipping only
+ * the newly-created intersections need projection; reuse the cached screen
+ * coordinates for every surviving original box vertex. */
+static uint8_t clip_face_and_project(
+    const CameraPoint *source,
+    uint8_t face_offset,
+    DrawPolygon *polygon
+) {
+    uint8_t output_count = 0;
+    uint8_t index;
+
+    for (index = 0; index < 4; ++index) {
+        const CameraPoint *current = &source[index];
+        const CameraPoint *previous = &source[index == 0 ? 3 : index - 1];
+        uint8_t current_inside = current->depth >= NEAR_PLANE;
+        uint8_t previous_inside = previous->depth >= NEAR_PLANE;
+
+        if (current_inside != previous_inside) {
+            CameraPoint intersection = intersect_near_plane(*previous, *current);
+
+            polygon->point[output_count++] = project_camera_point(&intersection);
+        }
+        if (current_inside) {
+            polygon->point[output_count++] =
+                screen_vertices[box_face_vertices[face_offset][index]];
+        }
+    }
+    if (output_count < 3) return 0;
+    polygon->count = output_count;
+    return 1;
+}
+
 static uint8_t polygon_intersects_layer(
-    const DrawPolygon *polygon,
+    DrawPolygon *polygon,
     const RenderLayer *layer
 ) {
     int24_t minimum_x = polygon->point[0].x;
@@ -538,9 +719,18 @@ static uint8_t polygon_intersects_layer(
     for (index = 1; index < polygon->count; ++index) {
         if (polygon->point[index].x < minimum_x) minimum_x = polygon->point[index].x;
         if (polygon->point[index].x > maximum_x) maximum_x = polygon->point[index].x;
-        if (polygon->point[index].y < minimum_y) minimum_y = polygon->point[index].y;
+        if (polygon->point[index].y < minimum_y) {
+            minimum_y = polygon->point[index].y;
+            polygon->top_vertex = index;
+        }
         if (polygon->point[index].y > maximum_y) maximum_y = polygon->point[index].y;
     }
+    polygon->sample_first_row = (int16_t)(
+        (minimum_y - FIXED_ONE / 2 + FIXED_ONE - 1) >> FIXED_SHIFT
+    );
+    polygon->sample_last_row = (int16_t)(
+        (maximum_y - 1 - FIXED_ONE / 2) >> FIXED_SHIFT
+    );
     if (layer->lod_shift != 0) {
         bound_left = (bound_left >> layer->lod_shift) << layer->lod_shift;
         bound_right = (uint8_t)(
@@ -578,33 +768,29 @@ static void transform_world_vertices(const Camera *camera) {
     fixed_t extent_y = room->maximum_y - room->minimum_y;
     fixed_t extent_z = room->maximum_z - room->minimum_z;
     CameraPoint base = transform_point(camera, minimum);
-    CameraPoint edge_x = {
-        fixed_mul(extent_x, camera->right.x),
-        fixed_mul(extent_x, camera->up.x),
-        fixed_mul(extent_x, camera->forward.x)
-    };
-    CameraPoint edge_y = {
-        fixed_mul(extent_y, camera->right.y),
-        fixed_mul(extent_y, camera->up.y),
-        fixed_mul(extent_y, camera->forward.y)
-    };
-    CameraPoint edge_z = {
-        fixed_mul(extent_z, camera->right.z),
-        fixed_mul(extent_z, camera->up.z),
-        fixed_mul(extent_z, camera->forward.z)
-    };
+    CameraPoint edge[3];
     uint8_t index;
-    uint8_t first = camera->room * 8u;
-    uint8_t end = first + 8u;
+    uint8_t first = 0;
+    uint8_t end = 8u;
+
+    RENDER_BENCHMARK_COUNT(transformed_vertices, 8u);
+
+    scale_camera_room_edges_exact(
+        camera,
+        extent_x,
+        extent_y,
+        extent_z,
+        edge
+    );
 
     camera_vertices[first] = base;
-    camera_vertices[first + 1] = camera_point_add(base, edge_x);
-    camera_vertices[first + 3] = camera_point_add(base, edge_y);
-    camera_vertices[first + 2] = camera_point_add(camera_vertices[first + 1], edge_y);
-    camera_vertices[first + 4] = camera_point_add(base, edge_z);
-    camera_vertices[first + 5] = camera_point_add(camera_vertices[first + 1], edge_z);
-    camera_vertices[first + 7] = camera_point_add(camera_vertices[first + 3], edge_z);
-    camera_vertices[first + 6] = camera_point_add(camera_vertices[first + 2], edge_z);
+    camera_vertices[first + 1] = camera_point_add(base, edge[0]);
+    camera_vertices[first + 3] = camera_point_add(base, edge[1]);
+    camera_vertices[first + 2] = camera_point_add(camera_vertices[first + 1], edge[1]);
+    camera_vertices[first + 4] = camera_point_add(base, edge[2]);
+    camera_vertices[first + 5] = camera_point_add(camera_vertices[first + 1], edge[2]);
+    camera_vertices[first + 7] = camera_point_add(camera_vertices[first + 3], edge[2]);
+    camera_vertices[first + 6] = camera_point_add(camera_vertices[first + 2], edge[2]);
     for (index = first; index < end; ++index) {
         vertex_projectable[index] = camera_vertices[index].depth >= NEAR_PLANE;
         if (vertex_projectable[index]) {
@@ -618,21 +804,19 @@ static uint8_t rasterize_polygon(
     const RenderLayer *layer
 );
 
-static uint8_t append_face_polygon(
-    RenderLayer *layer,
+static uint8_t prepare_face_polygon(
+    const RenderLayer *layer,
     uint8_t face_index,
-    uint8_t face_offset
+    uint8_t face_offset,
+    DrawPolygon *polygon
 ) {
     const WorldFace *face = &world_faces[face_index];
     CameraPoint point[4];
-    DrawPolygon *polygon;
     uint8_t index;
     uint8_t inside_count = 0;
 
-    if (layer->count >= MAX_DRAW_POLYGONS) return 0;
-    polygon = &layer->polygon[layer->count];
     for (index = 0; index < 4; ++index) {
-        uint8_t vertex = face->vertex[index];
+        uint8_t vertex = box_face_vertices[face_offset][index];
         point[index] = camera_vertices[vertex];
         if (vertex_projectable[vertex]) {
             polygon->point[index] = screen_vertices[vertex];
@@ -642,14 +826,28 @@ static uint8_t append_face_polygon(
     if (inside_count == 0) return 0;
     if (inside_count == 4) {
         polygon->count = 4;
-    } else if (!clip_and_project(point, 4, polygon)) {
+    } else if (!clip_face_and_project(point, face_offset, polygon)) {
         return 0;
     }
+    polygon->top_vertex = 0;
     if (!polygon_intersects_layer(polygon, layer)) return 0;
     polygon->color = face->color;
     polygon->portal = NO_PORTAL;
     polygon->face = face_index;
     polygon->face_offset = face_offset;
+    return 1;
+}
+
+static uint8_t append_face_polygon(
+    RenderLayer *layer,
+    uint8_t face_index,
+    uint8_t face_offset
+) {
+    DrawPolygon *polygon;
+
+    if (layer->count >= MAX_DRAW_POLYGONS) return 0;
+    polygon = &layer->polygon[layer->count];
+    if (!prepare_face_polygon(layer, face_index, face_offset, polygon)) return 0;
     if (!rasterize_polygon(polygon, layer)) return 0;
     ++layer->count;
     return 1;
@@ -706,6 +904,7 @@ static void append_portal_polygon(
     };
     polygon = &layer->polygon[layer->count];
     if (!clip_and_project(point, 4, polygon)) return;
+    polygon->top_vertex = 0;
     if (!polygon_intersects_layer(polygon, layer)) return;
     polygon->color = portal_index == 0 ? COLOR_PORTAL_ORANGE : COLOR_PORTAL_BLUE;
     polygon->portal = portal_index;
@@ -715,18 +914,7 @@ static void append_portal_polygon(
     ++layer->count;
 }
 
-static void collect_room_polygons(
-    RenderLayer *layer,
-    const Camera *camera,
-    uint8_t skipped_face,
-    uint8_t allow_portals
-) {
-    const Room *room = &rooms[camera->room];
-    uint8_t face_added[ROOM_FACE_COUNT] = {0, 0, 0, 0, 0, 0};
-    uint8_t offset;
-    uint8_t portal_index;
-
-    layer->count = 0;
+static void prepare_room_geometry(RenderLayer *layer, const Camera *camera) {
     layer->horizon_valid = (uint8_t)(
         fixed_absolute(camera->right.z) <= 8 &&
         fixed_absolute(camera->up.z) >= 64
@@ -744,6 +932,21 @@ static void collect_room_polygons(
         layer->horizon_row = horizon;
     }
     transform_world_vertices(camera);
+}
+
+static void collect_room_polygons(
+    RenderLayer *layer,
+    const Camera *camera,
+    uint8_t skipped_face,
+    uint8_t allow_portals
+) {
+    const Room *room = &rooms[camera->room];
+    uint8_t face_added[ROOM_FACE_COUNT] = {0, 0, 0, 0, 0, 0};
+    uint8_t offset;
+    uint8_t portal_index;
+
+    layer->count = 0;
+    prepare_room_geometry(layer, camera);
     for (offset = 0; offset < ROOM_FACE_COUNT; ++offset) {
         uint8_t face_index = room->first_face + offset;
 
@@ -767,14 +970,12 @@ static void collect_room_polygons(
     }
 }
 
-static int16_t floor_q8(int24_t value) {
-    if (value >= 0) return (int16_t)(value / FIXED_ONE);
-    return (int16_t)-(((-value) + FIXED_ONE - 1) / FIXED_ONE);
+static __attribute__((always_inline)) inline int16_t floor_q8(int24_t value) {
+    return (int16_t)(value >> FIXED_SHIFT);
 }
 
-static int16_t ceil_q8(int24_t value) {
-    if (value >= 0) return (int16_t)((value + FIXED_ONE - 1) / FIXED_ONE);
-    return (int16_t)-((-value) / FIXED_ONE);
+static __attribute__((always_inline)) inline int16_t ceil_q8(int24_t value) {
+    return (int16_t)((value + FIXED_ONE - 1) >> FIXED_SHIFT);
 }
 
 static int32_t edge_x_step(int24_t delta_x, int24_t delta_y) {
@@ -784,13 +985,15 @@ static int32_t edge_x_step(int24_t delta_x, int24_t delta_y) {
     if (delta_y < FIXED_ONE ||
         index >= EDGE_RECIPROCAL_SIZE ||
         delta_x > 32767 || delta_x < -32767) {
+        RENDER_BENCHMARK_COUNT(edge_division_fallbacks, 1u);
         return ((int32_t)delta_x * FIXED_ONE) / delta_y;
     }
     return ((int32_t)delta_x * edge_reciprocal_table[index]) >>
         EDGE_STEP_PRECISION_SHIFT;
 }
 
-static uint8_t rasterize_polygon(
+#if 0
+static uint8_t rasterize_polygon_lod(
     DrawPolygon *polygon,
     const RenderLayer *layer
 ) {
@@ -803,6 +1006,8 @@ static uint8_t rasterize_polygon(
     int16_t last_row;
     int16_t row;
     uint8_t any = 0;
+
+    RENDER_BENCHMARK_COUNT(rasterized_polygons, 1u);
 
     for (index = 1; index < polygon->count; ++index) {
         if (polygon->point[index].y < minimum_y) minimum_y = polygon->point[index].y;
@@ -892,6 +1097,10 @@ static uint8_t rasterize_polygon(
 
     polygon->first_row = (uint8_t)first_row;
     polygon->last_row = (uint8_t)last_row;
+    RENDER_BENCHMARK_COUNT(
+        raster_rows,
+        (uint16_t)(((last_row - first_row) >> layer->lod_shift) + 1)
+    );
     for (row = first_row; row <= last_row; row += step) {
         int16_t first_column;
         int16_t last_column;
@@ -922,6 +1131,136 @@ static uint8_t rasterize_polygon(
     return any;
 }
 
+/*
+ * Full-resolution layers use one sample per row. Keeping this path separate
+ * lets the compiler fold step=1 and sample_origin=0 instead of carrying the
+ * portal LOD shift through every edge and scanline.
+ */
+static uint8_t rasterize_polygon_full(
+    DrawPolygon *polygon,
+    const RenderLayer *layer
+) {
+    uint8_t index;
+    int24_t minimum_y = polygon->point[0].y;
+    int24_t maximum_y = minimum_y;
+    int16_t first_row;
+    int16_t last_row;
+    int16_t row;
+    uint8_t any = 0;
+
+    RENDER_BENCHMARK_COUNT(rasterized_polygons, 1u);
+
+    for (index = 1; index < polygon->count; ++index) {
+        if (polygon->point[index].y < minimum_y) minimum_y = polygon->point[index].y;
+        if (polygon->point[index].y > maximum_y) maximum_y = polygon->point[index].y;
+    }
+    first_row = ceil_q8(minimum_y - FIXED_ONE / 2);
+    last_row = floor_q8(maximum_y - 1 - FIXED_ONE / 2);
+    if (first_row < layer->first_row) first_row = layer->first_row;
+    if (last_row > layer->last_row) last_row = layer->last_row;
+    if (first_row < 0) first_row = 0;
+    if (last_row >= active_render_height) last_row = active_render_height - 1;
+    if (first_row <= 0) first_row = 0;
+    if (last_row < 0) return 0;
+    if (first_row > last_row) return 0;
+
+    for (row = first_row; row <= last_row; ++row) {
+        span_left[row] = PROJECTED_LIMIT + 1;
+        span_right[row] = -PROJECTED_LIMIT - 1;
+    }
+    for (index = 0; index < polygon->count; ++index) {
+        ScreenPoint a = polygon->point[index];
+        ScreenPoint b = polygon->point[
+            index + 1 == polygon->count ? 0 : index + 1
+        ];
+        int24_t delta_x;
+        int24_t delta_y;
+        int32_t x_step;
+        int32_t x_value;
+        int16_t edge_first;
+        int16_t edge_last;
+        int16_t current_row;
+
+        if (a.y == b.y) continue;
+        if (a.y > b.y) {
+            ScreenPoint swap = a;
+            a = b;
+            b = swap;
+        }
+        delta_x = (int24_t)b.x - a.x;
+        delta_y = (int24_t)b.y - a.y;
+        edge_first = ceil_q8((int24_t)a.y - FIXED_ONE / 2);
+        edge_last = floor_q8((int24_t)b.y - 1 - FIXED_ONE / 2);
+        if (edge_first < first_row) edge_first = first_row;
+        if (edge_last > last_row) edge_last = last_row;
+        if (edge_first <= 0) edge_first = 0;
+        if (edge_first > edge_last) continue;
+
+        x_step = edge_x_step(delta_x, delta_y);
+        x_value = a.x + (int32_t)(
+            (x_step *
+                ((int24_t)edge_first * FIXED_ONE + FIXED_ONE / 2 - a.y)) >>
+            FIXED_SHIFT
+        );
+        for (current_row = edge_first; current_row <= edge_last; ++current_row) {
+            if (x_value < span_left[current_row]) {
+                span_left[current_row] = clamp_projected(x_value);
+            }
+            if (x_value > span_right[current_row]) {
+                span_right[current_row] = clamp_projected(x_value);
+            }
+            if (current_row < edge_last) x_value += x_step;
+        }
+    }
+
+    polygon->first_row = (uint8_t)first_row;
+    polygon->last_row = (uint8_t)last_row;
+    RENDER_BENCHMARK_COUNT(
+        raster_rows,
+        (uint16_t)(last_row - first_row + 1)
+    );
+    for (row = first_row; row <= last_row; ++row) {
+        int16_t first_column;
+        int16_t last_column;
+
+        if (span_left[row] == PROJECTED_LIMIT + 1) {
+            polygon->span_left[row] = 255;
+            polygon->span_right[row] = 0;
+            continue;
+        }
+        first_column = ceil_q8((int24_t)span_left[row] - FIXED_ONE / 2);
+        last_column = floor_q8((int24_t)span_right[row] - FIXED_ONE / 2);
+        if (first_column < 0) first_column = 0;
+        if (last_column >= active_render_width) last_column = active_render_width - 1;
+        if (first_column <= last_column) {
+            polygon->span_left[row] = (uint8_t)first_column;
+            polygon->span_right[row] = (uint8_t)last_column;
+            if (row >= layer->first_row && row <= layer->last_row &&
+                last_column >= layer->row_left[row] &&
+                first_column <= layer->row_right[row]) {
+                any = 1;
+            }
+        } else {
+            polygon->span_left[row] = 255;
+            polygon->span_right[row] = 0;
+        }
+    }
+    return any;
+}
+
+static uint8_t rasterize_polygon(
+    DrawPolygon *polygon,
+    const RenderLayer *layer
+) {
+    if (layer->lod_shift == 0) {
+        return rasterize_polygon_full(polygon, layer);
+    }
+    return rasterize_polygon_lod(polygon, layer);
+}
+#endif
+
+#include "raster_two_chain_split.inc"
+
 static void write_frame_span(
     uint8_t row,
     int16_t first_column,
@@ -929,10 +1268,14 @@ static void write_frame_span(
     uint8_t color
 ) {
     if (first_column <= last_column) {
+        uint16_t width = (uint16_t)(last_column - first_column + 1);
+
+        RENDER_BENCHMARK_COUNT(filled_spans, 1u);
+        RENDER_BENCHMARK_COUNT(filled_pixels, width);
         memset(
             &low_frame.data[low_row_offsets[row] + first_column],
             color,
-            (size_t)(last_column - first_column + 1)
+            width
         );
     }
 }
@@ -958,8 +1301,9 @@ static __attribute__((always_inline)) inline uint8_t face_color_for_row(
     return polygon->color + light;
 }
 
+#if 0
 static void fill_polygon(const DrawPolygon *polygon, const RenderLayer *layer) {
-    uint8_t aperture_index[PORTAL_COUNT];
+    const DrawPolygon *aperture_polygon[PORTAL_COUNT];
     uint8_t aperture_count = 0;
     uint8_t index;
     uint8_t row;
@@ -970,7 +1314,7 @@ static void fill_polygon(const DrawPolygon *polygon, const RenderLayer *layer) {
         const DrawPolygon *aperture = &layer->polygon[index];
         if (aperture->portal != NO_PORTAL &&
             portals[aperture->portal].host_face == polygon->face) {
-            aperture_index[aperture_count++] = index;
+            aperture_polygon[aperture_count++] = aperture;
         }
     }
     if (aperture_count == 0) {
@@ -1019,8 +1363,7 @@ static void fill_polygon(const DrawPolygon *polygon, const RenderLayer *layer) {
         for (aperture_number = 0;
              aperture_number < aperture_count && hole_count < PORTAL_COUNT;
              ++aperture_number) {
-            const DrawPolygon *aperture =
-                &layer->polygon[aperture_index[aperture_number]];
+            const DrawPolygon *aperture = aperture_polygon[aperture_number];
             int16_t left;
             int16_t right;
             if (row < aperture->first_row || row > aperture->last_row ||
@@ -1058,6 +1401,162 @@ static void fill_polygon(const DrawPolygon *polygon, const RenderLayer *layer) {
             if (cursor > last_column) break;
         }
         write_frame_span(row, cursor, last_column, row_color);
+    }
+}
+#endif
+
+static void fill_polygon_color_rows(
+    const DrawPolygon *polygon,
+    const RenderLayer *layer,
+    const DrawPolygon *const *aperture_polygon,
+    uint8_t aperture_count,
+    int16_t first_row,
+    int16_t last_row,
+    uint8_t row_color
+) {
+    uint8_t row;
+
+    if (first_row < polygon->first_row) first_row = polygon->first_row;
+    if (last_row > polygon->last_row) last_row = polygon->last_row;
+    if (first_row > last_row) return;
+
+    if (aperture_count == 0 && layer == &render_layers[0]) {
+        for (row = (uint8_t)first_row; row <= (uint8_t)last_row; ++row) {
+            write_frame_span(
+                row,
+                polygon->span_left[row],
+                polygon->span_right[row],
+                row_color
+            );
+        }
+        return;
+    }
+    if (aperture_count == 0) {
+        for (row = (uint8_t)first_row; row <= (uint8_t)last_row; ++row) {
+            int16_t first_column = polygon->span_left[row];
+            int16_t last_column = polygon->span_right[row];
+
+            if (first_column < layer->row_left[row]) first_column = layer->row_left[row];
+            if (last_column > layer->row_right[row]) last_column = layer->row_right[row];
+            write_frame_span(row, first_column, last_column, row_color);
+        }
+        return;
+    }
+    for (row = (uint8_t)first_row; row <= (uint8_t)last_row; ++row) {
+        int16_t first_column;
+        int16_t last_column;
+        uint8_t hole_left[PORTAL_COUNT];
+        uint8_t hole_right[PORTAL_COUNT];
+        uint8_t hole_count = 0;
+        uint8_t aperture_number;
+        int16_t cursor;
+
+        first_column = polygon->span_left[row];
+        last_column = polygon->span_right[row];
+        if (first_column < layer->row_left[row]) first_column = layer->row_left[row];
+        if (last_column > layer->row_right[row]) last_column = layer->row_right[row];
+        if (first_column > last_column) continue;
+
+        for (aperture_number = 0;
+             aperture_number < aperture_count && hole_count < PORTAL_COUNT;
+             ++aperture_number) {
+            const DrawPolygon *aperture = aperture_polygon[aperture_number];
+            int16_t left;
+            int16_t right;
+            if (row < aperture->first_row || row > aperture->last_row ||
+                aperture->span_left[row] > aperture->span_right[row]) {
+                continue;
+            }
+            left = aperture->span_left[row];
+            right = aperture->span_right[row];
+            if (left < first_column) left = first_column;
+            if (right > last_column) right = last_column;
+            if (left <= right) {
+                hole_left[hole_count] = (uint8_t)left;
+                hole_right[hole_count] = (uint8_t)right;
+                ++hole_count;
+            }
+        }
+        if (hole_count == 2 && hole_left[1] < hole_left[0]) {
+            uint8_t swap = hole_left[0];
+            hole_left[0] = hole_left[1];
+            hole_left[1] = swap;
+            swap = hole_right[0];
+            hole_right[0] = hole_right[1];
+            hole_right[1] = swap;
+        }
+        cursor = first_column;
+        for (aperture_number = 0; aperture_number < hole_count; ++aperture_number) {
+            if (hole_right[aperture_number] < cursor) continue;
+            write_frame_span(
+                row,
+                cursor,
+                (int16_t)hole_left[aperture_number] - 1,
+                row_color
+            );
+            cursor = (int16_t)hole_right[aperture_number] + 1;
+            if (cursor > last_column) break;
+        }
+        write_frame_span(row, cursor, last_column, row_color);
+    }
+}
+
+static void fill_polygon(const DrawPolygon *polygon, const RenderLayer *layer) {
+    const DrawPolygon *aperture_polygon[PORTAL_COUNT];
+    uint8_t aperture_count = 0;
+    uint8_t index;
+    uint8_t base_light = face_light_level[polygon->face_offset];
+    uint8_t base_color = polygon->color + base_light;
+
+    for (index = layer->solid_count;
+         index < layer->count && aperture_count < PORTAL_COUNT;
+         ++index) {
+        const DrawPolygon *aperture = &layer->polygon[index];
+        if (aperture->portal != NO_PORTAL &&
+            portals[aperture->portal].host_face == polygon->face) {
+            aperture_polygon[aperture_count++] = aperture;
+        }
+    }
+    if (polygon->face_offset > 1u || !layer->horizon_valid) {
+        fill_polygon_color_rows(
+            polygon,
+            layer,
+            aperture_polygon,
+            aperture_count,
+            polygon->first_row,
+            polygon->last_row,
+            base_color
+        );
+        return;
+    }
+    {
+        int16_t horizon = layer->horizon_row;
+        int16_t near_limit = active_horizon_near_limit;
+        int16_t far_limit = active_horizon_far_limit;
+
+        fill_polygon_color_rows(
+            polygon, layer, aperture_polygon, aperture_count,
+            polygon->first_row, horizon - far_limit, base_color
+        );
+        fill_polygon_color_rows(
+            polygon, layer, aperture_polygon, aperture_count,
+            horizon - far_limit + 1, horizon - near_limit,
+            (uint8_t)(base_color - 1u)
+        );
+        fill_polygon_color_rows(
+            polygon, layer, aperture_polygon, aperture_count,
+            horizon - near_limit + 1, horizon + near_limit - 1,
+            (uint8_t)(polygon->color + (base_light > 1u ? base_light - 2u : 0u))
+        );
+        fill_polygon_color_rows(
+            polygon, layer, aperture_polygon, aperture_count,
+            horizon + near_limit, horizon + far_limit - 1,
+            (uint8_t)(base_color - 1u)
+        );
+        fill_polygon_color_rows(
+            polygon, layer, aperture_polygon, aperture_count,
+            horizon + far_limit, polygon->last_row, base_color
+        );
     }
 }
 
@@ -1144,6 +1643,12 @@ static uint8_t build_portal_clip(
         }
         portal_lod_state[portal_polygon->portal] = lod;
         child->lod_shift = lod;
+        RENDER_BENCHMARK_COUNT(portal_clip_pixels, child->pixel_area);
+        if (lod == 0) {
+            RENDER_BENCHMARK_COUNT(full_portal_views, 1u);
+        } else {
+            RENDER_BENCHMARK_COUNT(lod_portal_views, 1u);
+        }
     }
     return any;
 }
@@ -1240,49 +1745,316 @@ static void clear_portal_lod(uint8_t shift) {
     }
 }
 
-static void fill_polygon_lod(
-    const DrawPolygon *polygon,
+/* Depth-one cameras cannot recurse, so emit their spans as they are scanned
+ * instead of storing every span in DrawPolygon and reading it back to fill. */
+static void rasterize_fill_polygon_full(
+    DrawPolygon *polygon,
+    const RenderLayer *layer
+) {
+    int16_t first_row = polygon->sample_first_row;
+    int16_t last_row = polygon->sample_last_row;
+    int16_t row;
+    uint8_t base_color =
+        (uint8_t)(polygon->color + face_light_level[polygon->face_offset]);
+    uint8_t horizon_shaded = (uint8_t)(
+        polygon->face_offset <= 1u && layer->horizon_valid
+    );
+    RasterChain first_chain;
+    RasterChain second_chain;
+
+    RENDER_BENCHMARK_COUNT(rasterized_polygons, 1u);
+    if (first_row < layer->first_row) first_row = layer->first_row;
+    if (last_row > layer->last_row) last_row = layer->last_row;
+    if (first_row < 0) first_row = 0;
+    if (last_row >= active_render_height) last_row = active_render_height - 1;
+    if (last_row < 0 || first_row > last_row) return;
+
+    RENDER_BENCHMARK_COUNT(raster_rows, (uint16_t)(last_row - first_row + 1));
+    first_chain.vertex = polygon->top_vertex;
+    first_chain.direction = 1;
+    first_chain.edges_left = polygon->count;
+    second_chain.vertex = polygon->top_vertex;
+    second_chain.direction = -1;
+    second_chain.edges_left = polygon->count;
+    if (!raster_chain_begin_edge(&first_chain, polygon, first_row, 1u) ||
+        !raster_chain_begin_edge(&second_chain, polygon, first_row, 1u)) {
+        return;
+    }
+
+    for (row = first_row; row <= last_row; ++row) {
+        int24_t left_value;
+        int24_t right_value;
+        int16_t first_column;
+        int16_t last_column;
+
+        if (row > first_chain.last_row &&
+            !raster_chain_begin_edge(&first_chain, polygon, row, 1u)) {
+            return;
+        }
+        if (row > second_chain.last_row &&
+            !raster_chain_begin_edge(&second_chain, polygon, row, 1u)) {
+            return;
+        }
+        left_value = first_chain.x_value;
+        right_value = second_chain.x_value;
+        if (left_value > right_value) {
+            int24_t swap = left_value;
+            left_value = right_value;
+            right_value = swap;
+        }
+        first_column = ceil_q8(clamp_projected(left_value) - FIXED_ONE / 2);
+        last_column = floor_q8(clamp_projected(right_value) - FIXED_ONE / 2);
+        if (first_column < 0) first_column = 0;
+        if (last_column >= active_render_width) last_column = active_render_width - 1;
+        if (first_column < layer->row_left[row]) first_column = layer->row_left[row];
+        if (last_column > layer->row_right[row]) last_column = layer->row_right[row];
+        {
+            uint8_t row_color = base_color;
+
+            if (horizon_shaded) {
+                row_color = face_color_for_row(polygon, layer, (uint8_t)row);
+            }
+            write_frame_span(
+                (uint8_t)row,
+                first_column,
+                last_column,
+                row_color
+            );
+        }
+        if (row < first_chain.last_row) {
+            first_chain.x_value += first_chain.x_advance;
+        }
+        if (row < second_chain.last_row) {
+            second_chain.x_value += second_chain.x_advance;
+        }
+    }
+}
+
+static void rasterize_fill_polygon_lod(
+    DrawPolygon *polygon,
     const RenderLayer *layer
 ) {
     uint8_t shift = layer->lod_shift;
     uint8_t step = (uint8_t)(1u << shift);
     uint8_t sample_origin = step >> 1;
     uint8_t maximum_column = (active_render_width >> shift) - 1u;
+    int16_t first_row = polygon->sample_first_row;
+    int16_t last_row = polygon->sample_last_row;
+    int16_t row;
+    RasterChain first_chain;
+    RasterChain second_chain;
+
+    RENDER_BENCHMARK_COUNT(rasterized_polygons, 1u);
+    {
+        int16_t clip_first =
+            ((int16_t)layer->first_row >> shift) * step + sample_origin;
+        int16_t clip_last =
+            ((int16_t)layer->last_row >> shift) * step + sample_origin;
+        if (first_row < clip_first) first_row = clip_first;
+        if (last_row > clip_last) last_row = clip_last;
+    }
+    if (first_row < 0) first_row = 0;
+    if (last_row >= active_render_height) last_row = active_render_height - 1;
+    if (first_row <= sample_origin) {
+        first_row = sample_origin;
+    } else {
+        first_row = sample_origin +
+            (((first_row - sample_origin + step - 1u) >> shift) << shift);
+    }
+    if (last_row < sample_origin) return;
+    last_row = sample_origin +
+        (((last_row - sample_origin) >> shift) << shift);
+    if (first_row > last_row) return;
+
+    RENDER_BENCHMARK_COUNT(
+        raster_rows,
+        (uint16_t)(((last_row - first_row) >> shift) + 1)
+    );
+    first_chain.vertex = polygon->top_vertex;
+    first_chain.direction = 1;
+    first_chain.edges_left = polygon->count;
+    second_chain.vertex = polygon->top_vertex;
+    second_chain.direction = -1;
+    second_chain.edges_left = polygon->count;
+    if (!raster_chain_begin_edge(&first_chain, polygon, first_row, step) ||
+        !raster_chain_begin_edge(&second_chain, polygon, first_row, step)) {
+        return;
+    }
+
+    for (row = first_row; row <= last_row; row += step) {
+        int24_t left_value;
+        int24_t right_value;
+        int16_t first_column;
+        int16_t last_column;
+
+        if (row > first_chain.last_row &&
+            !raster_chain_begin_edge(&first_chain, polygon, row, step)) {
+            return;
+        }
+        if (row > second_chain.last_row &&
+            !raster_chain_begin_edge(&second_chain, polygon, row, step)) {
+            return;
+        }
+        left_value = first_chain.x_value;
+        right_value = second_chain.x_value;
+        if (left_value > right_value) {
+            int24_t swap = left_value;
+            left_value = right_value;
+            right_value = swap;
+        }
+        first_column = ceil_q8(clamp_projected(left_value) - FIXED_ONE / 2);
+        last_column = floor_q8(clamp_projected(right_value) - FIXED_ONE / 2);
+        if (first_column < 0) first_column = 0;
+        if (last_column >= active_render_width) last_column = active_render_width - 1;
+        if (last_column >= sample_origin) {
+            uint8_t target_first = first_column <= sample_origin ? 0 :
+                (uint8_t)((first_column - sample_origin + step - 1u) >>
+                    shift);
+            uint8_t target_last =
+                (uint8_t)((last_column - sample_origin) >> shift);
+
+            if (target_last > maximum_column) target_last = maximum_column;
+            if (target_first <= target_last) {
+                uint8_t target_row = (uint8_t)row >> shift;
+                memset(
+                    &portal_lod_frame[
+                        (uint16_t)target_row * PORTAL_LOD_STRIDE + target_first
+                    ],
+                    face_color_for_row(polygon, layer, (uint8_t)row),
+                    (size_t)(target_last - target_first + 1u)
+                );
+            }
+        }
+        if (row + step <= first_chain.last_row) {
+            first_chain.x_value += first_chain.x_advance;
+        }
+        if (row + step <= second_chain.last_row) {
+            second_chain.x_value += second_chain.x_advance;
+        }
+    }
+}
+
+static void composite_portal_lod_half(const RenderLayer *layer) {
     uint8_t row;
 
-    for (row = polygon->first_row; row <= polygon->last_row; row += step) {
-        uint8_t first_column;
-        uint8_t last_column;
-        uint8_t target_row;
-        if (polygon->span_left[row] > polygon->span_right[row]) continue;
-        if (polygon->span_right[row] < sample_origin) continue;
-        first_column = polygon->span_left[row] <= sample_origin ? 0 :
-            (uint8_t)((polygon->span_left[row] - sample_origin + step - 1u) >> shift);
-        last_column =
-            (uint8_t)((polygon->span_right[row] - sample_origin) >> shift);
-        if (last_column > maximum_column) last_column = maximum_column;
-        if (first_column > last_column) continue;
-        target_row = row >> shift;
-        memset(
-            &portal_lod_frame[(uint16_t)target_row * PORTAL_LOD_STRIDE + first_column],
-            face_color_for_row(polygon, layer, row),
-            (size_t)(last_column - first_column + 1u)
+    for (row = layer->first_row; row <= layer->last_row; ++row) {
+        uint8_t column;
+        uint8_t *destination;
+        const uint8_t *source;
+
+        if (layer->row_left[row] > layer->row_right[row]) continue;
+        RENDER_BENCHMARK_COUNT(
+            portal_composite_pixels,
+            (uint16_t)(layer->row_right[row] - layer->row_left[row] + 1u)
         );
+
+        column = layer->row_left[row];
+        destination = &low_frame.data[low_row_offsets[row] + column];
+        source = &portal_lod_frame[
+            ((uint16_t)(row >> 1) * PORTAL_LOD_STRIDE) + (column >> 1)
+        ];
+
+        if ((column & 1u) != 0) {
+            *destination++ = *source++;
+            ++column;
+        }
+        while (column < layer->row_right[row]) {
+            uint8_t color = *source++;
+
+            *destination++ = color;
+            *destination++ = color;
+            column += 2u;
+        }
+        if (column <= layer->row_right[row]) {
+            *destination = *source;
+        }
+    }
+}
+
+static void composite_portal_lod_quarter(const RenderLayer *layer) {
+    uint8_t row;
+
+    for (row = layer->first_row; row <= layer->last_row; ++row) {
+        uint8_t column;
+        uint8_t phase;
+        uint8_t *destination;
+        const uint8_t *source;
+
+        if (layer->row_left[row] > layer->row_right[row]) continue;
+        RENDER_BENCHMARK_COUNT(
+            portal_composite_pixels,
+            (uint16_t)(layer->row_right[row] - layer->row_left[row] + 1u)
+        );
+
+        column = layer->row_left[row];
+        destination = &low_frame.data[low_row_offsets[row] + column];
+        source = &portal_lod_frame[
+            ((uint16_t)(row >> 2) * PORTAL_LOD_STRIDE) + (column >> 2)
+        ];
+        phase = column & 3u;
+
+        if (phase != 0) {
+            uint8_t color = *source++;
+
+            do {
+                *destination++ = color;
+                ++column;
+                ++phase;
+            } while (column <= layer->row_right[row] && phase < 4u);
+        }
+        while ((uint16_t)column + 3u <= layer->row_right[row]) {
+            uint8_t color = *source++;
+
+            *destination++ = color;
+            *destination++ = color;
+            *destination++ = color;
+            *destination++ = color;
+            column += 4u;
+        }
+        if (column <= layer->row_right[row]) {
+            uint8_t color = *source;
+
+            do {
+                *destination++ = color;
+                ++column;
+            } while (column <= layer->row_right[row]);
+        }
     }
 }
 
 static void composite_portal_lod(const RenderLayer *layer) {
-    uint8_t shift = layer->lod_shift;
-    uint8_t row;
-    for (row = layer->first_row; row <= layer->last_row; ++row) {
-        uint8_t column;
-        uint16_t source_row = (uint16_t)(row >> shift) * PORTAL_LOD_STRIDE;
-        if (layer->row_left[row] > layer->row_right[row]) continue;
-        for (column = layer->row_left[row]; column <= layer->row_right[row]; ++column) {
-            low_frame.data[low_row_offsets[row] + column] =
-                portal_lod_frame[source_row + (column >> shift)];
+    /* render_portal_lod is entered only for the two reduced-detail states. */
+    if (layer->lod_shift == 1u) {
+        composite_portal_lod_half(layer);
+    } else {
+        composite_portal_lod_quarter(layer);
+    }
+}
+
+static void render_room_faces_immediate(
+    const Camera *camera,
+    RenderLayer *layer,
+    uint8_t skipped_face,
+    uint8_t lod
+) {
+    const Room *room = &rooms[camera->room];
+    uint8_t offset;
+
+    prepare_room_geometry(layer, camera);
+    for (offset = 0; offset < ROOM_FACE_COUNT; ++offset) {
+        uint8_t face_index = room->first_face + offset;
+        DrawPolygon *polygon = &layer->polygon[0];
+
+        if (face_index == skipped_face) continue;
+        if (!prepare_face_polygon(layer, face_index, offset, polygon)) continue;
+        if (lod != 0) {
+            rasterize_fill_polygon_lod(polygon, layer);
+        } else {
+            rasterize_fill_polygon_full(polygon, layer);
         }
     }
+    layer->count = 0;
+    layer->solid_count = 0;
 }
 
 static void render_portal_lod(
@@ -1290,13 +2062,81 @@ static void render_portal_lod(
     RenderLayer *layer,
     uint8_t skipped_face
 ) {
-    uint8_t index;
+    RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_FILL);
     clear_portal_lod(layer->lod_shift);
-    collect_room_polygons(layer, camera, skipped_face, 0);
-    for (index = 0; index < layer->solid_count; ++index) {
-        fill_polygon_lod(&layer->polygon[index], layer);
-    }
+    RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_GEOMETRY);
+    render_room_faces_immediate(camera, layer, skipped_face, 1);
+    RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_FILL);
     composite_portal_lod(layer);
+}
+
+static void render_camera(
+    const Camera *camera,
+    uint8_t depth,
+    uint8_t skipped_face
+);
+
+/* When a nearby portal covers every root pixel, none of the source room's
+ * six wall polygons can contribute to the image. Detect that exact case from
+ * the aperture itself and render only the destination camera. */
+static uint8_t render_fullscreen_portal(const Camera *camera) {
+    const Room *room = &rooms[camera->room];
+    RenderLayer *root = &render_layers[0];
+    RenderLayer *child = &render_layers[1];
+    uint8_t portal_index;
+    uint8_t candidate = NO_PORTAL;
+
+    for (portal_index = 0; portal_index < PORTAL_COUNT; ++portal_index) {
+        const Portal *portal = &portals[portal_index];
+        Vec3 relative;
+        fixed_t plane_distance;
+        CameraPoint center;
+
+        if (!portal->active || !portals[portal->linked].active ||
+            portal->room != camera->room || portal->host_face < room->first_face ||
+            portal->host_face >= room->first_face + ROOM_FACE_COUNT) {
+            continue;
+        }
+        relative = vec_subtract(portal->center, camera->position);
+        plane_distance = fixed_absolute(
+            signed_axis_component(relative, portal->normal)
+        );
+        /* Below 1.25 world units the fixed-size aperture can cover the
+         * complete viewport; the exact clip test below remains authoritative. */
+        if (plane_distance > (5 * FIXED_ONE) / 4) continue;
+        center = transform_point(camera, portal->center);
+        if (center.depth < NEAR_PLANE) continue;
+        if (candidate != NO_PORTAL) return 0;
+        candidate = portal_index;
+    }
+    if (candidate == NO_PORTAL) return 0;
+
+    root->count = 0;
+    append_portal_polygon(root, camera, candidate);
+    if (root->count != 1u ||
+        !build_portal_clip(&root->polygon[0], root, child) ||
+        child->pixel_area != root->pixel_area) {
+        return 0;
+    }
+    {
+        Camera destination = transform_portal_camera(candidate, camera);
+        uint8_t destination_face = portals[portals[candidate].linked].host_face;
+
+        memset(
+            low_frame.data,
+            COLOR_VOID,
+            (uint16_t)active_render_width * active_render_height
+        );
+        RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_GEOMETRY);
+        if (child->lod_shift == 0) {
+            render_camera(&destination, 1u, destination_face);
+        } else {
+            render_portal_lod(&destination, child, destination_face);
+        }
+        RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_FILL);
+        draw_portal_outline(child, root->polygon[0].color);
+    }
+    return 1;
 }
 
 static void render_camera(
@@ -1307,11 +2147,24 @@ static void render_camera(
     RenderLayer *layer = &render_layers[depth];
     uint8_t index;
 
+    if (depth != 0) {
+        RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_GEOMETRY);
+        render_room_faces_immediate(camera, layer, skipped_face, 0);
+        return;
+    }
+
+    RENDER_BENCHMARK_SWITCH(
+        depth == 0 ? TRUE3D_BENCH_ROOT_GEOMETRY :
+            TRUE3D_BENCH_PORTAL_GEOMETRY
+    );
     collect_room_polygons(
         layer,
         camera,
         skipped_face,
         (uint8_t)(depth < PORTAL_RECURSION_LIMIT)
+    );
+    RENDER_BENCHMARK_SWITCH(
+        depth == 0 ? TRUE3D_BENCH_ROOT_FILL : TRUE3D_BENCH_PORTAL_FILL
     );
     clear_render_layer(layer, depth);
     for (index = 0; index < layer->solid_count; ++index) {
@@ -1324,6 +2177,7 @@ static void render_camera(
             Camera destination;
             uint8_t destination_face;
 
+            RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_SETUP);
             if (!build_portal_clip(polygon, layer, child)) continue;
             destination = transform_portal_camera(polygon->portal, camera);
             destination_face = portals[portals[polygon->portal].linked].host_face;
@@ -1332,6 +2186,7 @@ static void render_camera(
             } else {
                 render_portal_lod(&destination, child, destination_face);
             }
+            RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_FILL);
             draw_portal_outline(child, polygon->color);
         }
     }
@@ -1763,19 +2618,27 @@ void engine_graphics_init(void) {
     uint8_t color;
     uint8_t shade;
     uint16_t index;
+    uint16_t *near_scale = projection_scale_table;
 
     configure_render_mode(0);
-    for (index = 0; index < (NEAR_PLANE >> PROJECTION_TABLE_SHIFT); ++index) {
-        projection_scale_table[index] = 65535u;
+    for (index = 0; index < PROJECTION_TABLE_SIZE; ++index) {
+        uint16_t scale;
+
+        if (index < (NEAR_PLANE >> PROJECTION_TABLE_SHIFT)) {
+            scale = 65535u;
+        } else {
+            scale = (uint16_t)(
+                ((uint32_t)PROJECTION_FOCAL * FIXED_ONE *
+                    (1u << PROJECTION_SCALE_SHIFT)) /
+                ((uint24_t)index << PROJECTION_TABLE_SHIFT)
+            );
+        }
+        *near_scale++ = scale;
+        *near_scale++ = scale;
+        *near_scale++ = scale;
+        *near_scale++ = scale;
     }
-    for (; index < PROJECTION_TABLE_SIZE; ++index) {
-        projection_scale_table[index] = (uint16_t)(
-            ((uint32_t)PROJECTION_FOCAL * FIXED_ONE *
-                (1u << PROJECTION_SCALE_SHIFT)) /
-            ((uint24_t)index << PROJECTION_TABLE_SHIFT)
-        );
-    }
-    for (index = (PROJECTION_TABLE_SIZE << PROJECTION_TABLE_SHIFT) >>
+    for (index = NEAR_PROJECTION_DEPTH_COUNT >>
             FAR_PROJECTION_TABLE_SHIFT;
          index < PROJECTION_TABLE_SIZE;
          ++index) {
@@ -1921,61 +2784,123 @@ uint8_t engine_update(
     );
 }
 
-/* 3-by-5 glyphs: F, P, S, R, D, then digits 0 through 9. */
-static const uint8_t hud_glyphs[15][5] = {
-    {7, 4, 6, 4, 4},
-    {6, 5, 6, 4, 4},
-    {7, 4, 7, 1, 7},
-    {6, 5, 6, 5, 5},
-    {6, 5, 5, 5, 6},
-    {7, 5, 5, 5, 7},
-    {2, 6, 2, 2, 7},
-    {7, 1, 7, 4, 7},
-    {7, 1, 7, 1, 7},
-    {5, 5, 7, 1, 1},
-    {7, 4, 7, 1, 7},
-    {7, 4, 7, 5, 7},
-    {7, 1, 2, 2, 2},
-    {7, 5, 7, 5, 7},
-    {7, 5, 7, 1, 7}
+enum HudGlyph {
+    HUD_GLYPH_F = 0,
+    HUD_GLYPH_P,
+    HUD_GLYPH_S,
+    HUD_GLYPH_R,
+    HUD_GLYPH_E,
+    HUD_GLYPH_C,
+    HUD_GLYPH_A,
+    HUD_GLYPH_M,
+    HUD_GLYPH_SPACE,
+    HUD_GLYPH_DASH,
+    HUD_GLYPH_DOT,
+    HUD_GLYPH_DIGIT_0,
+    HUD_GLYPH_COUNT = HUD_GLYPH_DIGIT_0 + 10
 };
 
-static void draw_hud_glyph(uint8_t *frame, uint8_t glyph, uint8_t x, uint8_t y) {
-    uint8_t row;
-    for (row = 0; row < 5; ++row) {
-        uint8_t bits = hud_glyphs[glyph][row];
-        uint8_t column;
-        for (column = 0; column < 3; ++column) {
-            if ((bits & (4u >> column)) != 0) {
-                frame[(uint16_t)(y + row) * GFX_LCD_WIDTH + x + column] = COLOR_HUD;
-            }
+static const uint8_t hud_glyph_rows[5][HUD_GLYPH_COUNT] = {
+    {7, 6, 7, 6, 7, 7, 2, 5, 0, 0, 0, 7, 2, 7, 7, 5, 7, 7, 7, 7, 7},
+    {4, 5, 4, 5, 4, 4, 5, 7, 0, 0, 0, 5, 6, 1, 1, 5, 4, 4, 1, 5, 5},
+    {6, 6, 7, 6, 6, 4, 7, 7, 0, 7, 0, 5, 2, 7, 7, 7, 7, 7, 2, 7, 7},
+    {4, 4, 1, 5, 4, 4, 5, 5, 0, 0, 0, 5, 2, 4, 1, 1, 1, 5, 2, 5, 1},
+    {4, 4, 7, 5, 7, 7, 5, 5, 0, 0, 2, 7, 7, 7, 7, 1, 7, 7, 2, 7, 7}
+};
+
+static const uint8_t hud_left_pixel[8] = {
+    COLOR_BLACK, COLOR_BLACK, COLOR_BLACK, COLOR_BLACK,
+    COLOR_HUD, COLOR_HUD, COLOR_HUD, COLOR_HUD
+};
+static const uint8_t hud_middle_pixel[8] = {
+    COLOR_BLACK, COLOR_BLACK, COLOR_HUD, COLOR_HUD,
+    COLOR_BLACK, COLOR_BLACK, COLOR_HUD, COLOR_HUD
+};
+static const uint8_t hud_right_pixel[8] = {
+    COLOR_BLACK, COLOR_HUD, COLOR_BLACK, COLOR_HUD,
+    COLOR_BLACK, COLOR_HUD, COLOR_BLACK, COLOR_HUD
+};
+
+static void draw_hud_text(
+    uint8_t *destination,
+    const uint8_t *glyph,
+    uint8_t count
+) {
+    while (count-- != 0) {
+        const uint8_t *source = &hud_glyph_rows[0][*glyph++];
+        uint8_t *row_destination = destination;
+        uint8_t row;
+
+        for (row = 0; row < 5; ++row) {
+            uint8_t bits = *source;
+            row_destination[0] = hud_left_pixel[bits];
+            row_destination[1] = hud_middle_pixel[bits];
+            row_destination[2] = hud_right_pixel[bits];
+            row_destination += GFX_LCD_WIDTH;
+            source += HUD_GLYPH_COUNT;
         }
+        destination += 4;
     }
 }
 
 static void draw_hud(
-    uint8_t fps,
-    uint8_t room,
-    uint8_t dev_mode,
-    uint8_t render_shift
+    uint16_t fps_tenths,
+    uint8_t dev_mode
 ) {
+    static const uint8_t freecam_glyphs[] = {
+        HUD_GLYPH_F, HUD_GLYPH_R, HUD_GLYPH_E, HUD_GLYPH_E,
+        HUD_GLYPH_C, HUD_GLYPH_A, HUD_GLYPH_M
+    };
+    uint8_t fps_glyphs[9] = {
+        HUD_GLYPH_F, HUD_GLYPH_P, HUD_GLYPH_S, HUD_GLYPH_SPACE
+    };
     uint8_t *frame = &gfx_vbuffer[0][0];
+    uint16_t whole_fps;
+    uint8_t digit_count;
+    uint8_t count = 4;
     uint8_t row;
 
     for (row = 0; row < 8; ++row) {
-        memset(&frame[(uint16_t)row * GFX_LCD_WIDTH], COLOR_BLACK, 56);
+        uint8_t *screen_row = frame + (uint16_t)row * GFX_LCD_WIDTH;
+        memset(screen_row, COLOR_BLACK, 38);
+        if (dev_mode) memset(screen_row + 78, COLOR_BLACK, 31);
     }
-    draw_hud_glyph(frame, 0, 2, 2);
-    draw_hud_glyph(frame, 1, 6, 2);
-    draw_hud_glyph(frame, 2, 10, 2);
-    draw_hud_glyph(frame, (uint8_t)(5 + fps / 100u), 18, 2);
-    draw_hud_glyph(frame, (uint8_t)(5 + (fps / 10u) % 10u), 22, 2);
-    draw_hud_glyph(frame, (uint8_t)(5 + fps % 10u), 26, 2);
-    draw_hud_glyph(frame, 3, 34, 2);
-    draw_hud_glyph(frame, (uint8_t)(5 + room + 1), 38, 2);
-    if (dev_mode) draw_hud_glyph(frame, 4, 44, 2);
-    draw_hud_glyph(frame, (uint8_t)(render_shift ? 8 : 11), 48, 2);
-    draw_hud_glyph(frame, (uint8_t)(render_shift ? 7 : 9), 52, 2);
+
+    if (fps_tenths == 0) {
+        fps_glyphs[count++] = HUD_GLYPH_DASH;
+        fps_glyphs[count++] = HUD_GLYPH_DASH;
+        fps_glyphs[count++] = HUD_GLYPH_DOT;
+        fps_glyphs[count++] = HUD_GLYPH_DASH;
+    } else {
+        whole_fps = fps_tenths / 10u;
+        digit_count = whole_fps >= 100u ? 3u : (whole_fps >= 10u ? 2u : 1u);
+        if (digit_count == 3u) {
+            whole_fps %= 1000u;
+            fps_glyphs[count++] = (uint8_t)(
+                HUD_GLYPH_DIGIT_0 + whole_fps / 100u
+            );
+        }
+        if (digit_count >= 2u) {
+            fps_glyphs[count++] = (uint8_t)(
+                HUD_GLYPH_DIGIT_0 + (whole_fps / 10u) % 10u
+            );
+        }
+        fps_glyphs[count++] = (uint8_t)(
+            HUD_GLYPH_DIGIT_0 + whole_fps % 10u
+        );
+        fps_glyphs[count++] = HUD_GLYPH_DOT;
+        fps_glyphs[count++] = (uint8_t)(
+            HUD_GLYPH_DIGIT_0 + fps_tenths % 10u
+        );
+    }
+    draw_hud_text(frame + 2u * GFX_LCD_WIDTH + 2u, fps_glyphs, count);
+    if (dev_mode) {
+        draw_hud_text(
+            frame + 2u * GFX_LCD_WIDTH + 80u,
+            freecam_glyphs,
+            sizeof(freecam_glyphs)
+        );
+    }
 
     memset(
         &frame[(uint24_t)(GFX_LCD_HEIGHT / 2) * GFX_LCD_WIDTH +
@@ -1988,10 +2913,11 @@ static void draw_hud(
     }
 }
 
-void engine_render(const EngineState *state, uint8_t fps) {
+void engine_render(const EngineState *state, uint16_t fps_tenths) {
     Camera camera;
     uint8_t row;
 
+    RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_SETUP);
     configure_render_mode(state->render_shift);
     camera.position = state->position;
     camera.right = state->right;
@@ -2009,11 +2935,18 @@ void engine_render(const EngineState *state, uint8_t fps) {
         render_layers[0].row_left[row] = 0;
         render_layers[0].row_right[row] = active_render_width - 1;
     }
-    render_camera(&camera, 0, NO_PORTAL);
+    if (!render_fullscreen_portal(&camera)) {
+        render_camera(&camera, 0, NO_PORTAL);
+    }
+    RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_WAIT);
+    gfx_Wait();
+    RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PRESENT);
     if (active_render_shift == 0) {
         present_low_frame_fast();
     } else {
         present_low_frame_32_fast();
     }
-    draw_hud(fps, state->room, state->dev_mode, active_render_shift);
+    RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_OVERLAY);
+    draw_hud(fps_tenths, state->dev_mode);
+    RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_ADMIN);
 }
