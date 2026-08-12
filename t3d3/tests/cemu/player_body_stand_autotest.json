@@ -35,13 +35,13 @@
       "description": "Player standing on a movable cube",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["59F23C94", "702034BA", "6D21AAE9", "4FC0C756", "4A57C4F4", "45C8E7AA"]
+      "expected_CRCs": ["59F23C94", "702034BA", "6D21AAE9", "4FC0C756", "4A57C4F4", "45C8E7AA", "09668BD7"]
     },
     "standing_player": {
       "description": "Grounded player state on cube top",
       "start": "0xD1026C",
       "size": "0x35",
-      "expected_CRCs": ["AD55FDEB", "CDB0B7B1", "B78094FC", "EE7C9FEE", "567C62B5"]
+      "expected_CRCs": ["AD55FDEB", "CDB0B7B1", "B78094FC", "EE7C9FEE", "567C62B5", "B7CCB525"]
     },
     "standing_body": {
       "description": "Supporting body state",

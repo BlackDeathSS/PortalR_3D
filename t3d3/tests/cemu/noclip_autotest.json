@@ -34,19 +34,19 @@
       "description": "Noclip camera beyond the source room boundary",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["017EC981", "7E14537F", "E0133495"]
+      "expected_CRCs": ["017EC981", "7E14537F", "E0133495", "C4A889DE"]
     },
     "outside_state": {
       "description": "Freecam state with noclip enabled outside room bounds",
       "start": "0xD1026C",
       "size": "0x35",
-      "expected_CRCs": ["2A516E32", "FA2606CE", "8F53C93B"]
+      "expected_CRCs": ["2A516E32", "FA2606CE", "8F53C93B", "1BDAF087"]
     },
     "reclipped_view": {
       "description": "Camera view after noclip is disabled",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["017EC981", "82719E3E", "E0133495"]
+      "expected_CRCs": ["017EC981", "82719E3E", "E0133495", "C4A889DE"]
     },
     "reclipped_state": {
       "description": "Freecam state clamped back into the source room",

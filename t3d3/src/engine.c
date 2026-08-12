@@ -97,10 +97,9 @@
 #define BODY_PORTAL_FIT_TOLERANCE 8
 #define PLAYER_BODY_PUSH_SCALE 192
 #define PLAYER_BODY_VERTICAL_SLOP 16
-#define BODY_FLAT_LOD_SPARSE_DEPTH (4 * FIXED_ONE)
-#define BODY_FLAT_LOD_DENSE_DEPTH (3 * FIXED_ONE)
-#define BODY_FLAT_LOD_DENSE_COUNT 5u
+#define BODY_FLAT_LOD_DEPTH (8 * FIXED_ONE)
 #define NO_BODY 255u
+#define BODY_STORAGE_SLOTS 8u
 
 enum PaletteIndex {
     COLOR_BLACK = 0,
@@ -278,8 +277,10 @@ static WorldVertex world_vertices[MAX_WORLD_VERTICES];
 static WorldFace world_faces[MAX_WORLD_FACES];
 static Room rooms[TRUE3D_MAX_ROOMS];
 static uint8_t room_count;
-static T3D3Body bodies[T3D3_MAX_BODIES];
-static uint8_t body_sleep_ticks[T3D3_MAX_BODIES];
+/* Preserve the recovery/debug memory layout while the public API and every
+ * runtime loop enforce the four-body gameplay limit. */
+static T3D3Body bodies[BODY_STORAGE_SLOTS];
+static uint8_t body_sleep_ticks[BODY_STORAGE_SLOTS];
 static uint8_t active_body_count;
 static uint8_t held_body = NO_BODY;
 
@@ -2454,20 +2455,13 @@ static void transform_body_vertices(
 
 static uint8_t body_fast_projected_bounds(
     CameraPoint center,
-    const CameraPoint *world_axis,
+    const CameraPoint *projected_extent,
     int16_t *first_column,
     int16_t *last_column,
     int16_t *first_row,
     int16_t *last_row
 ) {
-    fixed_t extent_x = fixed_absolute(world_axis[0].x) +
-        fixed_absolute(world_axis[1].x) + fixed_absolute(world_axis[2].x);
-    fixed_t extent_y = fixed_absolute(world_axis[0].y) +
-        fixed_absolute(world_axis[1].y) + fixed_absolute(world_axis[2].y);
-    fixed_t extent_depth = fixed_absolute(world_axis[0].depth) +
-        fixed_absolute(world_axis[1].depth) +
-        fixed_absolute(world_axis[2].depth);
-    fixed_t minimum_depth = center.depth - extent_depth;
+    fixed_t minimum_depth = center.depth - projected_extent->depth;
     CameraPoint first;
     CameraPoint second;
     ScreenPoint projected_first;
@@ -2475,13 +2469,13 @@ static uint8_t body_fast_projected_bounds(
 
     if (minimum_depth < NEAR_PLANE) return 0;
     first = (CameraPoint){
-        center.x - extent_x,
-        center.y + extent_y,
+        center.x - projected_extent->x,
+        center.y + projected_extent->y,
         minimum_depth
     };
     second = (CameraPoint){
-        center.x + extent_x,
-        center.y - extent_y,
+        center.x + projected_extent->x,
+        center.y - projected_extent->y,
         minimum_depth
     };
     {
@@ -2716,6 +2710,7 @@ static void render_body(
     const Camera *camera,
     CameraPoint center,
     const CameraPoint *world_axis,
+    const CameraPoint *projected_extent,
     RenderLayer *layer,
     fixed_t flat_lod_depth
 ) {
@@ -2732,7 +2727,7 @@ static void render_body(
     if ((layer->lod_shift != 0 || center.depth >= flat_lod_depth) &&
         body_fast_projected_bounds(
             center,
-            world_axis,
+            projected_extent,
             &first_column,
             &last_column,
             &first_row,
@@ -2821,10 +2816,10 @@ static void render_bodies(const Camera *camera, RenderLayer *layer) {
     fixed_t depth[T3D3_MAX_BODIES];
     CameraPoint body_center[T3D3_MAX_BODIES];
     CameraPoint cached_world_axis[3];
+    CameraPoint cached_projected_extent;
     fixed_t cached_axis_extent = -1;
     uint8_t count = 0;
     uint8_t index;
-    fixed_t flat_lod_depth;
 
     if (active_body_count == 0) return;
     for (index = 0; index < T3D3_MAX_BODIES; ++index) {
@@ -2848,8 +2843,6 @@ static void render_bodies(const Camera *camera, RenderLayer *layer) {
         body_center[index] = transformed_center;
         ++count;
     }
-    flat_lod_depth = count >= BODY_FLAT_LOD_DENSE_COUNT ?
-        BODY_FLAT_LOD_DENSE_DEPTH : BODY_FLAT_LOD_SPARSE_DEPTH;
     for (index = 0; index < count; ++index) {
         const T3D3Body *body = &bodies[order[index]];
 
@@ -2865,14 +2858,27 @@ static void render_bodies(const Camera *camera, RenderLayer *layer) {
                 cached_axis_extent,
                 cached_world_axis
             );
+            cached_projected_extent.x =
+                fixed_absolute(cached_world_axis[0].x) +
+                fixed_absolute(cached_world_axis[1].x) +
+                fixed_absolute(cached_world_axis[2].x);
+            cached_projected_extent.y =
+                fixed_absolute(cached_world_axis[0].y) +
+                fixed_absolute(cached_world_axis[1].y) +
+                fixed_absolute(cached_world_axis[2].y);
+            cached_projected_extent.depth =
+                fixed_absolute(cached_world_axis[0].depth) +
+                fixed_absolute(cached_world_axis[1].depth) +
+                fixed_absolute(cached_world_axis[2].depth);
         }
         render_body(
             body,
             camera,
             body_center[order[index]],
             cached_world_axis,
+            &cached_projected_extent,
             layer,
-            flat_lod_depth
+            BODY_FLAT_LOD_DEPTH
         );
     }
 }
@@ -3810,7 +3816,7 @@ static uint8_t update_bodies(
 
             /* Two sleeping bodies cannot develop a new overlap until an
              * external interaction wakes one of them. Avoid re-running all
-             * 28 pair solvers for a settled eight-body scene. */
+             * pair solvers for a settled multi-body scene. */
             if (!first_body->active || !second_body->active ||
                 first_body->room != second_body->room ||
                 index == held_body || second == held_body ||

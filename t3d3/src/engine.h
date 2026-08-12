@@ -22,7 +22,7 @@
 #endif
 
 /* Stable YYMMDD/revision ID written into every benchmark result. */
-#define TRUE3D_BUILD_VERSION 0x26081144UL
+#define TRUE3D_BUILD_VERSION 0x26081202UL
 
 #ifndef TRUE3D_RENDER_BENCHMARK
 #define TRUE3D_RENDER_BENCHMARK 0
@@ -71,7 +71,7 @@ typedef struct {
 #define ENGINE_BUTTON_OBJECT_THROW (1u << 7)
 #define ENGINE_TOGGLE_NOCLIP (1u << 0)
 
-#define T3D3_MAX_BODIES 8u
+#define T3D3_MAX_BODIES 4u
 
 typedef int24_t fixed_t;
 

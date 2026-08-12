@@ -17,7 +17,7 @@ if ($engineHeader -notmatch 'TRUE3D_BUILD_VERSION\s+0x([0-9A-Fa-f]+)UL') {
     throw "Could not read TRUE3D_BUILD_VERSION from src/engine.h"
 }
 $resultRoot = Join-Path $t3d3Root "benchmark-results\resolution-$($Matches[1])"
-$layoutNames = @{0 = "no-body"; 1 = "root-eight"; 2 = "portal-eight"}
+$layoutNames = @{0 = "no-body"; 1 = "root-four"; 2 = "portal-four"}
 
 foreach ($resolution in $Resolutions) {
     if ($resolution -notin @(64, 80, 160)) {

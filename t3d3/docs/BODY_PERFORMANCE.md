@@ -1,8 +1,19 @@
-# Eight-body performance report
+# Movable-body performance report
 
-## Current frame-consistency pass
+## Four-body / eight-unit LOD checkpoint
 
-Build `0x26081144` is pixel- and simulation-exact to the accepted
+Build `0x26081202` caps the gameplay pool at four boxes and removes the former
+five-or-more density branch. Every supported box keeps full projected faces
+through eight world units. The deterministic 80x60 supplied-ROM CEmu results
+are 29.14 FPS average / 15.81 FPS 1% low for four root-room boxes and 26.41 FPS
+average / 16.21 FPS 1% low for four portal-destination boxes. Both routes keep
+the `0x90ABD6C8` fingerprint and four portal crossings. Artifacts are under
+`benchmark-results/resolution-26081202/80x60`.
+
+## Historical eight-body frame-consistency pass
+
+Build `0x26081201` includes the sparse-view eight-unit cube LOD range. The
+underlying performance pass remains pixel- and simulation-exact to the accepted
 `0x26081128` 80x60 renderer. It replaces the exhaustive camera-angle recovery
 performed after a player portal crossing with a bounded lookup. Pitch uses a
 monotonic lower-bound search; yaw examines only the applicable sine-table
@@ -15,6 +26,13 @@ removes redundant pointer-copy stack traffic from unchanged dirty-presenter
 groups, and unrolls the full 80x60 presenter used on cache cold starts. It does
 not change portal LOD thresholds, cube LOD, aperture coverage, resolution, or
 simulation cadence.
+
+The current micro-pass also caches the shared equal-size cube's camera-space
+projected extent once per camera, removing repeated absolute-value sums from
+every body bound test. The final root-eight capture is 39.012 ms / 25.63 FPS
+average with a 13.63 FPS 1% low; state, logical-frame, and presented-frame
+hashes remain exact. This is a small geometry saving, not a solution to the
+remaining raster/composite tail.
 
 | Layout | `0x26081128` average | `0x26081144` average | Old 1% low | New 1% low |
 |---|---:|---:|---:|---:|

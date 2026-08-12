@@ -343,15 +343,11 @@ static uint8_t live_archive_report(void) {
 static uint8_t live_reset_state(void) {
     static const Vec3 room_zero_bodies[T3D3_MAX_BODIES] = {
         {-3 * 256, 4 * 256, 128}, {-1 * 256, 4 * 256, 128},
-        { 1 * 256, 4 * 256, 128}, { 3 * 256, 4 * 256, 128},
-        {-3 * 256, 7 * 256, 128}, {-1 * 256, 7 * 256, 128},
-        { 1 * 256, 7 * 256, 128}, { 3 * 256, 7 * 256, 128}
+        { 1 * 256, 4 * 256, 128}, { 3 * 256, 4 * 256, 128}
     };
     static const Vec3 room_one_bodies[T3D3_MAX_BODIES] = {
         { 9 * 256, 2 * 256, 128}, {11 * 256, 2 * 256, 128},
-        {13 * 256, 2 * 256, 128}, {15 * 256, 2 * 256, 128},
-        { 9 * 256, 6 * 256, 128}, {11 * 256, 6 * 256, 128},
-        {13 * 256, 6 * 256, 128}, {15 * 256, 6 * 256, 128}
+        {13 * 256, 2 * 256, 128}, {15 * 256, 2 * 256, 128}
     };
     const Vec3 *positions;
     uint8_t room;
@@ -364,6 +360,8 @@ static uint8_t live_reset_state(void) {
     for (index = 0; index < T3D3_MAX_BODIES; ++index) {
         if (engine_spawn_body(positions[index], room, 128, 8) == 0) return 0;
     }
+    /* The benchmark also certifies the public four-box cap. */
+    if (engine_spawn_body(positions[0], room, 128, 8) != 0) return 0;
     return 1;
 }
 

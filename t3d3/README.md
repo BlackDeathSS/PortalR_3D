@@ -10,7 +10,7 @@ the texture rasterizer, improved portal kernels, higher-detail geometry, and
 movable-body system can be introduced independently and rejected if they break
 perspective, collision, portal placement, or performance.
 
-The first T3D3 extension is active: an eight-slot translation-only box pool
+The first T3D3 extension is active: a four-slot translation-only box pool
 supports gravity, room collision, sleeping, simple body/body response,
 pickup/drop/throw, projected box rendering in root and portal views, and portal
 traversal with position, velocity, and all three box basis axes transformed.
@@ -19,15 +19,16 @@ and is stopped when a pushed cube is pinned against a room boundary. Player
 pushes wake sleeping cubes and can carry a cube through a correctly aligned
 portal crossing.
 
-Build `0x26081144` keeps 80x60 as the normal `T3D3DEV` configuration. Convex
+Build `0x26081202` keeps 80x60 as the normal `T3D3DEV` configuration. Convex
 room faces, full-resolution flat cubes, reduced portal faces, and reduced
 portal composition now use segment-wide assembly loops instead of returning to
 C for every row. Reduced destination spans are limited to the portal bounds,
 and settled body pairs are skipped until an interaction wakes either body. An
 exact bounded camera-angle recovery removes 21-22 ms from each portal-crossing
-spike. The repeatable CEmu route runs at 34.75 FPS with no cubes, 25.60 FPS
-with eight cubes in the root room, and 26.14 FPS with eight cubes in the portal
-destination. Their 1% lows are 19.33, 13.62, and 16.66 FPS respectively; all
+spike. Equal-size cube projected extents are cached once per camera and reused
+for every body bound. The repeatable CEmu route runs at 34.75 FPS with no cubes, 29.14 FPS
+with four cubes in the root room, and 26.41 FPS with four cubes in the portal
+destination. Their 1% lows are 19.33, 15.81, and 16.21 FPS respectively; all
 854 per-frame simulation hashes and all logical/presented section hashes remain
 exact.
 
@@ -37,10 +38,9 @@ the old negative clearance margin. A deterministic push-through fixture keeps
 the player in the source room while confirming that the cube, velocity, and
 basis transfer to the destination room.
 
-Cube LOD is density-adaptive. Views with four or fewer render-candidate cubes keep full
-projected faces out to four world units instead of three. Crowded views retain
-the measured three-unit cutoff so the eight-cube stress case does not suffer
-the large regression of a global four-unit cutoff. Portal rendering retains
+Cube LOD uses one rule for the complete four-box pool: projected faces remain
+fully detailed through eight world units, with the shaded silhouette path used
+beyond that distance. Portal rendering retains
 full, half, and quarter resolution states selected from projected aperture
 size; thresholds are normalized for 80x60 and reduced buffers clear only their
 visible aperture.

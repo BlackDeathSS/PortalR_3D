@@ -25,13 +25,13 @@
       "description": "Floor cube pushed from rest through a wall portal",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["61706677", "E57EDC39", "5E7D2FFD", "5951E107", "62A0D362", "3D5F41DE"]
+      "expected_CRCs": ["61706677", "E57EDC39", "5E7D2FFD", "5951E107", "62A0D362", "3D5F41DE", "FF20F709"]
     },
     "pushed_portal_player": {
       "description": "Player remains in the source room after pushing",
       "start": "0xD1026C",
       "size": "0x35",
-      "expected_CRCs": ["B2B2F7FE", "3853FD0B", "BFB203B1", "5ADD1726", "5E4EF5F8"]
+      "expected_CRCs": ["B2B2F7FE", "3853FD0B", "BFB203B1", "5ADD1726", "5E4EF5F8", "6B568993"]
     },
     "pushed_portal_body": {
       "description": "Pushed body transferred to the destination room",

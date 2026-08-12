@@ -18,7 +18,7 @@
   ],
   "hashes": {
     "result": {
-      "description": "Intentional full-RAM dump after eight-body benchmark",
+      "description": "Intentional full-RAM dump after four-body benchmark",
       "start": "ram_start",
       "size": "ram_size",
       "expected_CRCs": ["00000000"]

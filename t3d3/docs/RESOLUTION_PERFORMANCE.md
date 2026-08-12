@@ -53,11 +53,9 @@ groups into 64x4 physical blocks. This halves group-loop overhead. It can copy
 more pixels for a small isolated change, which is why the no-body 1% low is
 slightly lower even though average and median performance improve.
 
-Cube LOD now uses the camera's body-render candidate count. Four or fewer cubes keep exact
-projected faces until four world units; five or more use the proven three-unit
-cutoff. A global four-unit cutoff was measured and rejected: it reduced the
-eight-cube-through-portal route to 18.961 FPS. The adaptive version restores
-22.171 FPS while giving normal sparse scenes the requested longer detail range.
+The gameplay pool is capped at four cubes. Every cube keeps exact projected
+faces until eight world units, so there is no density-based 3-unit cutoff.
+Beyond eight units the existing shaded silhouette LOD remains active.
 
 Portal LOD already uses exact aperture area with hysteresis. Counter captures
 confirm distant apertures render at half resolution, very small or oblique

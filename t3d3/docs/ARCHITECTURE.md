@@ -51,12 +51,13 @@ to the convex-room fast path; use cell order and exact portal clips.
 
 ### Stage 3: movable bodies
 
-Add eight sphere/box bodies with fixed 60 Hz integration, gravity, sleeping,
+Add four sphere/box bodies with fixed 60 Hz integration, gravity, sleeping,
 room-plane collision, pickup/hold/throw, and portal crossing. Position, linear
 velocity, and box basis use the same rigid portal transform as the player.
 Angular velocity, torque, and general stable stacking remain out of scope.
 
-Checkpoint `0x26081111` implements the initial eight-body runtime, interaction,
+Checkpoint `0x26081111` implemented the initial eight-body runtime; the current
+engine caps the gameplay pool at four. The interaction,
 rendering, room collision, sleep, pair response, portal transfer, and
 player/body contact. The contact layer supports standing, underside blocking,
 horizontal pushes, pinned-body blocking, wake-up, and portal-aware pushed-body
@@ -71,9 +72,8 @@ by camera-facing faces are projected, and those projections are reused across
 the faces. Equal-depth pairs share a projection scale and assembly call. A
 whole-cube screen-bounds test avoids face setup when possible, and sequential
 faces reuse layer scratch rather than allocating a span record on the stack.
-Sparse views with up to four render candidates retain
-the exact face path through four room units. Views with five or more cubes use
-the measured three-unit threshold. More distant cubes and all reduced portal-layer cubes use
+Every supported cube retains the exact face path through eight room units.
+More distant cubes and all reduced portal-layer cubes use
 a two-projection shaded silhouette LOD clipped against the layer's exact row
 aperture. This avoids paying six polygon setups per small cube while preventing
 portal leakage. Equal-size cubes share camera axes, flat LOD bounds are derived
@@ -118,7 +118,7 @@ skips player portal crossing, room clamping, and player/body resolution while
 leaving world-body simulation unchanged. Disabling freecam clears noclip and
 clamps the camera into its current room on the same update.
 
-Level-file body records and real-calculator eight-body certification remain to
+Level-file body records and real-calculator four-body certification remain to
 be completed. The emulator route and before/after results are documented in
 [BODY_PERFORMANCE.md](BODY_PERFORMANCE.md).
 
@@ -139,8 +139,9 @@ against a host reference and the deterministic calculator route.
 T3D3 retains 64x48 as the performance reference, while 80x60 is now the
 development default chosen for visual detail. Quality changes remain explicit
 modes, not silent fallbacks. Build `0x26081128` reaches 25.32-25.86 FPS average
-in the deterministic 80x60 eight-body CEmu layouts, with 13.16-15.17 FPS 1%
-lows. It clears the requested greater-than-10% average improvement gate but
+in the historical deterministic 80x60 eight-body CEmu layouts. The current
+four-body layouts reach 29.14 FPS root / 26.41 FPS through-portal averages,
+with 15.81 / 16.21 FPS 1% lows. They clear the average gate but
 does not yet meet the 25 FPS tail contract and is not real-hardware certified.
 Further work must target portal spikes and presentation before texture cost is
 added.

@@ -1,4 +1,4 @@
-# T3D3 status - build 0x26081144
+# T3D3 status - build 0x26081202
 
 ## Completed foundation
 
@@ -7,7 +7,7 @@
 - Prefer `T3D3LVL`, then accept legacy `T3DLVL1`, then use the built-in level.
 - Preserved True3D projection, controls, room collision, portal placement,
   aperture holes, camera/basis transforms, traversal, and normal exit path.
-- Added eight translation-only boxes with gravity, room collision, sleeping,
+- Added four translation-only boxes with gravity, room collision, sleeping,
   pair separation/impulse, pickup/drop/throw, projected rendering, and portal
   transfer of position, velocity, and orientation basis.
 - Added player/body contact: top support and grounded state, underside head
@@ -15,14 +15,13 @@
   behavior, and portal-aware body movement during a push.
 - Added a zero-body fast path so unused object support does not scan the pool
   during every physics tick and portal view.
-- Added an eight-body render benchmark with deterministic root-room and
+- Added a four-body render benchmark with deterministic root-room and
   portal-destination layouts.
 - Batched cube-axis transforms, cached transformed centers and projected
   corners, added whole-cube screen rejection, and replaced repeated signed-axis
   fixed multiplies with signed component selection.
-- Added density-adaptive cube LOD. Sparse views with up to four render candidates retain
-  full projected faces through four room units; crowded views use the measured
-  three-unit threshold. Reduced portal layers retain the aperture-safe shaded
+- Cube LOD keeps every supported box on the full projected-face path through
+  eight room units. Reduced portal layers retain the aperture-safe shaded
   silhouette path.
 - Added a two-buffer dirty presenter for the native 64x48 mode. It compares
   eight-pixel logical groups against the cache for the active GraphX draw
@@ -70,6 +69,8 @@
   identical, while each measured crossing saves 21.3-22.5 ms.
 - Consolidated reduced-portal scratch clearing, removed redundant dirty-
   presenter pointer shuffles, and unrolled cache-cold 80x60 presentation.
+- Cache the equal-size cube's camera-space projected extent once per camera
+  for every root and portal body-bound test.
 
 ## Validation
 
@@ -100,15 +101,15 @@ boundary with room 0 retained and `noclip=1`, then clamps back to the exact
 
 Normal-build memory budget:
 
-- Resident program: 55,325 bytes
+- Resident program: 54,540 bytes
 - BSS: 45,019 bytes
 - Reserved stack: 4,096 bytes
-- Total: 104,440 / 153,600 bytes
-- Remaining: 49,160 bytes
+- Total: 103,655 / 153,600 bytes
+- Remaining: 49,945 bytes
 
 These are emulator measurements, not real-calculator certification.
 
-The deterministic eight-cube benchmarks improved as follows:
+The earlier deterministic eight-cube benchmarks improved as follows:
 
 | Layout | Build | Average | 1% low | Mean frame |
 |---|---:|---:|---:|---:|
@@ -123,17 +124,25 @@ The deterministic eight-cube benchmarks improved as follows:
 | Root room (80x60) | `0x26081144` | 25.602 FPS | 13.617 FPS | 39.060 ms |
 | Portal destination (80x60) | `0x26081144` | 26.143 FPS | 16.665 FPS | 38.252 ms |
 
+Build `0x26081202` replaces that experimental eight-body load with the final
+four-box cap and removes the density-based 3-unit LOD cutoff:
+
+| Layout | Average | 1% low | Mean frame |
+|---|---:|---:|---:|
+| Four cubes in root room (80x60) | 29.14 FPS | 15.81 FPS | 34.31 ms |
+| Four cubes in portal destination (80x60) | 26.41 FPS | 16.21 FPS | 37.86 ms |
+
 Against the original `0x26081102` eight-body baselines, the historical 64x48
 reference gained 81.1% in the root layout and 145.5% in the portal-destination
-layout. The current 80x60 development mode now clears 25 FPS on average in
-both layouts, but its 13.62-16.66 FPS 1% lows remain below the tail target.
+layout. The current 80x60 development mode clears 25 FPS on average in both
+four-box layouts, but its 15.81-16.21 FPS 1% lows remain below the tail target.
 Detailed artifacts and methodology are in
 [BODY_PERFORMANCE.md](BODY_PERFORMANCE.md).
 
 Resolution scaling results are documented in
 [RESOLUTION_PERFORMANCE.md](RESOLUTION_PERFORMANCE.md). With the accepted
-assembly scan/composite and frame-consistency passes, eight-cube averages are
-now 25.60-26.14 FPS at 80x60. Every retained 80x60 capture has the same route
+assembly scan/composite and frame-consistency passes, four-cube averages are
+now 26.41-29.14 FPS at 80x60. Every retained 80x60 capture has the same route
 fingerprint, crossings, and per-frame logical, presented, and simulation
 hashes.
 
@@ -144,8 +153,8 @@ hashes.
    polygon coverage.
 3. Add offline texture subdivision and mip/material records to `T3D3LVL` v2.
 4. Target the remaining portal-geometry spikes and update/render interaction
-   cost so the eight-body 1% low approaches the 25 FPS contract.
-5. Add authored body spawns and repeat the full eight-body test on hardware.
+   cost so the four-body 1% low approaches the 25 FPS contract.
+5. Add authored body spawns and repeat the full four-body test on hardware.
 
 Textures, arbitrary detail meshlets, and a new assembly texture rasterizer are
 not implemented in this checkpoint.

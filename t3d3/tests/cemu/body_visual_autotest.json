@@ -53,13 +53,13 @@
       "description": "Thrown cube after portal/room physics",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["375ED930", "7321D28D", "0B3E8E35", "7888E2D1", "2DDD8F6D", "56F57A01"]
+      "expected_CRCs": ["375ED930", "7321D28D", "0B3E8E35", "7888E2D1", "2DDD8F6D", "56F57A01", "E8C1E0DB"]
     },
     "body_state": {
-      "description": "Eight packed T3D3 body records at accepted renderer timing checkpoints",
+      "description": "Padded T3D3 body storage at accepted renderer timing checkpoints",
       "start": "0xD052C6",
       "size": "0x1A8",
-      "expected_CRCs": ["F969C50E", "0D8050F3", "A269094B", "90842E7F", "D1224152", "A602C89B", "E0D6C4A1"]
+      "expected_CRCs": ["F969C50E", "0D8050F3", "A269094B", "90842E7F", "D1224152", "A602C89B", "E0D6C4A1", "062747DC", "1FEA4CE6"]
     }
   }
 }
