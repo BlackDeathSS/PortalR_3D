@@ -19,16 +19,17 @@ and is stopped when a pushed cube is pinned against a room boundary. Player
 pushes wake sleeping cubes and can carry a cube through a correctly aligned
 portal crossing.
 
-Build `0x26081128` keeps 80x60 as the normal `T3D3DEV` configuration. Convex
+Build `0x26081144` keeps 80x60 as the normal `T3D3DEV` configuration. Convex
 room faces, full-resolution flat cubes, reduced portal faces, and reduced
 portal composition now use segment-wide assembly loops instead of returning to
 C for every row. Reduced destination spans are limited to the portal bounds,
-and settled body pairs are skipped until an interaction wakes either body.
-The repeatable CEmu route runs at 34.25 FPS with no cubes, 25.32 FPS with eight
-cubes in the root room, and 25.86 FPS with eight cubes in the portal
-destination. Against build `0x26081117`, the heavy layouts improve by 12.36%
-and 14.27%; all 854 per-frame simulation hashes and all logical/presented
-section hashes remain exact.
+and settled body pairs are skipped until an interaction wakes either body. An
+exact bounded camera-angle recovery removes 21-22 ms from each portal-crossing
+spike. The repeatable CEmu route runs at 34.75 FPS with no cubes, 25.60 FPS
+with eight cubes in the root room, and 26.14 FPS with eight cubes in the portal
+destination. Their 1% lows are 19.33, 13.62, and 16.66 FPS respectively; all
+854 per-frame simulation hashes and all logical/presented section hashes remain
+exact.
 
 Floor-resting cubes can now be pushed directly through a wall portal. The body
 aperture test preserves an exact floor-aligned fit instead of rejecting it with

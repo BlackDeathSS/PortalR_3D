@@ -1,5 +1,56 @@
 # Eight-body performance report
 
+## Current frame-consistency pass
+
+Build `0x26081144` is pixel- and simulation-exact to the accepted
+`0x26081128` 80x60 renderer. It replaces the exhaustive camera-angle recovery
+performed after a player portal crossing with a bounded lookup. Pitch uses a
+monotonic lower-bound search; yaw examines only the applicable sine-table
+quadrant plus the two cardinal plateau samples needed to preserve the original
+earliest-angle tie rule. The optimized result was exhaustively compared for
+all 256 yaw values, all 129 pitch values, and both portal directions.
+
+The pass also clears reduced portal scratch rows with one contiguous operation,
+removes redundant pointer-copy stack traffic from unchanged dirty-presenter
+groups, and unrolls the full 80x60 presenter used on cache cold starts. It does
+not change portal LOD thresholds, cube LOD, aperture coverage, resolution, or
+simulation cadence.
+
+| Layout | `0x26081128` average | `0x26081144` average | Old 1% low | New 1% low |
+|---|---:|---:|---:|---:|
+| No bodies | 34.249 FPS | 34.752 FPS | 17.709 FPS | 19.331 FPS |
+| Eight cubes in root room | 25.320 FPS | 25.602 FPS | 13.157 FPS | 13.617 FPS |
+| Eight cubes in portal destination | 25.860 FPS | 26.143 FPS | 15.167 FPS | 16.665 FPS |
+
+Mean frame time is 28.775 ms with no bodies, 39.060 ms with eight cubes in the
+root room, and 38.252 ms with eight cubes in the portal destination. The four
+portal-heavy crossing frames changed as follows:
+
+| Route frame | Old | New | Saved |
+|---:|---:|---:|---:|
+| 318 | 64.789 ms | 42.328 ms | 22.461 ms |
+| 324 | 73.181 ms | 50.751 ms | 22.430 ms |
+| 432 | 72.845 ms | 51.514 ms | 21.332 ms |
+| 764 | 77.972 ms | 55.908 ms | 22.064 ms |
+
+All 854 per-frame state hashes and every logical, presented, and state section
+hash match `0x26081128` in all three layouts. All 21 interaction fixtures pass.
+New wall-clock CRC variants were admitted only after checking the captured
+views and decoded player/body state; they reflect the faster render cadence,
+not changed physics rules.
+
+Two alternatives were measured and rejected. Always using the full unrolled
+presenter fell to 22.86 FPS average and 15.35 FPS 1% low in the portal-eight
+route because unconditional physical writes dominate. A reduced-portal body
+assembly prototype improved average time slightly but changed 19 logical
+frames by narrowing adjacent silhouettes one reduced sample; it was removed.
+
+The remaining tail is sustained view-dependent cube/portal raster work, not
+the former crossing search. Root-eight remains the worst 1% case at 13.62 FPS;
+portal-eight is now 16.66 FPS. These are supplied-ROM CEmu measurements, not
+physical-calculator certification. Decoded captures and hardware packages are
+under `benchmark-results/resolution-26081144/80x60`.
+
 ## Current 80x60 assembly scan pass
 
 Build `0x26081128` follows the exact `0x26081117` geometry baseline. It moves

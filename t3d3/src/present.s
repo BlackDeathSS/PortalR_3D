@@ -264,12 +264,10 @@ _present_low_frame_dirty_80_fast:
 	lea	ix, ix + 16
 	lea	iy, iy + 16
 	push	bc
-	push	de
-	pop	hl
+	ex	de, hl
 	ld	bc, 64
 	add	hl, bc
-	push	hl
-	pop	de
+	ex	de, hl
 	pop	bc
 	jp	.Ldirty80_group_done
 .Ldirty80_draw_group:
@@ -312,12 +310,10 @@ _present_low_frame_dirty_80_fast:
 	dec	c
 	jp	nz, .Ldirty80_group
 	push	bc
-	push	de
-	pop	hl
+	ex	de, hl
 	ld	bc, 960
 	add	hl, bc
-	push	hl
-	pop	de
+	ex	de, hl
 	pop	bc
 	dec	b
 	jp	nz, .Ldirty80_row
@@ -380,10 +376,12 @@ _present_low_frame_80_fast:
 	ld	bc, 60
 .Lpresent80_row:
 	push	bc
-	ld	b, 80
-.Lpresent80_pixel:
+	/* The 64x48 and 160x120 presenters already avoid a branch per source
+	 * pixel. Do the same here: this removes 4,800 DJNZ executions from every
+	 * full 80x60 presentation. */
+	.rept	80
 	present_pixel_4
-	djnz	.Lpresent80_pixel
+	.endr
 	push	de
 	pop	hl
 	ld	bc, 320

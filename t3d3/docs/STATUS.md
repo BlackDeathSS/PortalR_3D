@@ -1,4 +1,4 @@
-# T3D3 status - build 0x26081128
+# T3D3 status - build 0x26081144
 
 ## Completed foundation
 
@@ -65,6 +65,11 @@
 - Added developer-only noclip. `Trace`/F4 toggles it while freecam is active;
   it bypasses player room, portal, and object collision and automatically turns
   off when freecam is disabled.
+- Replaced the 256-angle/65-pitch exhaustive post-crossing camera recovery with
+  an exact quadrant/lower-bound lookup. The cardinal plateau tie rule remains
+  identical, while each measured crossing saves 21.3-22.5 ms.
+- Consolidated reduced-portal scratch clearing, removed redundant dirty-
+  presenter pointer shuffles, and unrolled cache-cold 80x60 presentation.
 
 ## Validation
 
@@ -76,11 +81,10 @@ The final 80x60 854-frame route retains the build `0x26081117` section hashes:
 
 Supplied-ROM CEmu 80x60 no-body result:
 
-- Average: 34.249 FPS
-- Median: 36.288 FPS
-- 1% low: 17.709 FPS
-- Mean frame: 29.198 ms
-- Improvement over build `0x26081117`: 7.04% average FPS
+- Average: 34.752 FPS
+- Median: 36.694 FPS
+- 1% low: 19.331 FPS
+- Mean frame: 28.775 ms
 
 Seventeen focused body checks pass on the supplied ROM: five held/thrown/portal
 render-and-state checks, six push-and-wall-block checks, and three standing
@@ -96,11 +100,11 @@ boundary with room 0 retained and `noclip=1`, then clamps back to the exact
 
 Normal-build memory budget:
 
-- Resident program: 54,514 bytes
+- Resident program: 55,325 bytes
 - BSS: 45,019 bytes
 - Reserved stack: 4,096 bytes
-- Total: 103,629 / 153,600 bytes
-- Remaining: 49,971 bytes
+- Total: 104,440 / 153,600 bytes
+- Remaining: 49,160 bytes
 
 These are emulator measurements, not real-calculator certification.
 
@@ -116,18 +120,20 @@ The deterministic eight-cube benchmarks improved as follows:
 | Portal destination | `0x26081105` | 25.352 FPS | 14.979 FPS | 39.444 ms |
 | Root room (80x60) | `0x26081128` | 25.320 FPS | 13.157 FPS | 39.495 ms |
 | Portal destination (80x60) | `0x26081128` | 25.860 FPS | 15.167 FPS | 38.670 ms |
+| Root room (80x60) | `0x26081144` | 25.602 FPS | 13.617 FPS | 39.060 ms |
+| Portal destination (80x60) | `0x26081144` | 26.143 FPS | 16.665 FPS | 38.252 ms |
 
 Against the original `0x26081102` eight-body baselines, the historical 64x48
 reference gained 81.1% in the root layout and 145.5% in the portal-destination
 layout. The current 80x60 development mode now clears 25 FPS on average in
-both layouts, but its 13.16-15.17 FPS 1% lows remain below the tail target.
+both layouts, but its 13.62-16.66 FPS 1% lows remain below the tail target.
 Detailed artifacts and methodology are in
 [BODY_PERFORMANCE.md](BODY_PERFORMANCE.md).
 
 Resolution scaling results are documented in
 [RESOLUTION_PERFORMANCE.md](RESOLUTION_PERFORMANCE.md). With the accepted
-assembly scan/composite pass and sleeping-pair skip, eight-cube averages are
-now 25.32-25.86 FPS at 80x60. Every retained 80x60 capture has the same route
+assembly scan/composite and frame-consistency passes, eight-cube averages are
+now 25.60-26.14 FPS at 80x60. Every retained 80x60 capture has the same route
 fingerprint, crossings, and per-frame logical, presented, and simulation
 hashes.
 

@@ -37,7 +37,7 @@
       "description": "Player pushing a free cube",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["0D0DC8AA", "B00ED10B", "9B2A9161", "C609C08E", "4BF06F3C"]
+      "expected_CRCs": ["0D0DC8AA", "B00ED10B", "9B2A9161", "C609C08E", "4BF06F3C", "1EB4C0FF"]
     },
     "pushed_player": {
       "description": "Player state after pushing a free cube",
@@ -55,7 +55,7 @@
       "description": "Cube and player stopped at the room boundary",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["9B8B38E6", "7C13B706", "7937A927", "8E3149FA"]
+      "expected_CRCs": ["9B8B38E6", "7C13B706", "7937A927", "8E3149FA", "04C15BC4"]
     },
     "blocked_player": {
       "description": "Blocked player state",

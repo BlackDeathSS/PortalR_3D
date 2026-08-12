@@ -2008,28 +2008,20 @@ static void draw_portal_outline(const RenderLayer *clip, uint8_t color) {
 
 static void clear_portal_lod(const RenderLayer *layer) {
     uint8_t shift = layer->lod_shift;
-    uint8_t first_column;
-    uint8_t last_column;
     uint8_t first_row;
     uint8_t last_row;
-    uint8_t width;
-    uint8_t row;
 
     if (shift == 0) return;
-    first_column = layer->bound_left >> shift;
-    last_column = layer->bound_right >> shift;
     first_row = layer->first_row >> shift;
     last_row = layer->last_row >> shift;
-    width = (uint8_t)(last_column - first_column + 1u);
-    for (row = first_row; row <= last_row; ++row) {
-        memset(
-            &portal_lod_frame[
-                (uint16_t)row * PORTAL_LOD_STRIDE + first_column
-            ],
-            COLOR_VOID,
-            width
-        );
-    }
+    /* Pixels outside the aperture are never composited. Clearing complete
+     * scratch rows trades a few harmless stores for one memset instead of up
+     * to thirty tiny libc calls on every reduced-resolution portal view. */
+    memset(
+        &portal_lod_frame[(uint16_t)first_row * PORTAL_LOD_STRIDE],
+        COLOR_VOID,
+        (uint16_t)(last_row - first_row + 1u) * PORTAL_LOD_STRIDE
+    );
 }
 
 /* Depth-one cameras cannot recurse, so emit their spans as they are scanned
@@ -3068,21 +3060,46 @@ static void render_camera(
 }
 
 static void recover_camera_angles(EngineState *state) {
-    uint8_t pitch_index;
-    uint8_t best_pitch = 0;
+    uint8_t pitch_low = 0;
+    uint8_t pitch_high = PITCH_LIMIT;
+    uint8_t best_pitch;
     fixed_t vertical = fixed_absolute(state->forward.z);
-    fixed_t best_pitch_error = INT_MAX;
+    fixed_t best_pitch_error;
     uint16_t angle;
     uint8_t best_yaw = state->yaw;
     int32_t best_yaw_score = INT32_MIN;
     uint8_t heading_source;
+    fixed_t heading_x;
+    fixed_t heading_y;
+    uint16_t first_angle;
+    uint16_t last_angle;
 
-    for (pitch_index = 0; pitch_index <= PITCH_LIMIT; ++pitch_index) {
-        fixed_t error = fixed_absolute(vertical - quarter_sine[pitch_index]);
-        if (error < best_pitch_error) {
-            best_pitch_error = error;
-            best_pitch = pitch_index;
+    /* quarter_sine is monotonic. Find its lower bound, then compare the one
+     * preceding sample. Walking back over a plateau preserves the exhaustive
+     * search's earliest-index tie rule exactly. */
+    while (pitch_low < pitch_high) {
+        uint8_t middle = (uint8_t)((pitch_low + pitch_high) >> 1);
+
+        if (quarter_sine[middle] < vertical) {
+            pitch_low = (uint8_t)(middle + 1u);
+        } else {
+            pitch_high = middle;
         }
+    }
+    best_pitch = pitch_low;
+    best_pitch_error = fixed_absolute(vertical - quarter_sine[best_pitch]);
+    if (best_pitch != 0) {
+        fixed_t previous_error = fixed_absolute(
+            vertical - quarter_sine[best_pitch - 1u]
+        );
+
+        if (previous_error <= best_pitch_error) {
+            --best_pitch;
+        }
+    }
+    while (best_pitch != 0 &&
+           quarter_sine[best_pitch - 1u] == quarter_sine[best_pitch]) {
+        --best_pitch;
     }
     state->pitch = state->forward.z < 0 ? -(int8_t)best_pitch : (int8_t)best_pitch;
 
@@ -3094,21 +3111,51 @@ static void recover_camera_angles(EngineState *state) {
         heading_source = 2;
     }
 
-    for (angle = 0; angle < 256u; ++angle) {
+    if (heading_source == 0) {
+        heading_x = state->forward.x;
+        heading_y = state->forward.y;
+    } else if (heading_source == 1) {
+        heading_x = state->right.y;
+        heading_y = -state->right.x;
+    } else if (state->pitch > 0) {
+        heading_x = -state->up.x;
+        heading_y = -state->up.y;
+    } else {
+        heading_x = state->up.x;
+        heading_y = state->up.y;
+    }
+
+    /* A dot product with a nonzero heading reaches its maximum in the same
+     * quadrant. Include the two preceding samples because the Q8 sine table's
+     * cardinal values have three-entry plateaus; this preserves the exhaustive
+     * search's earliest-angle tie rule. In the wrapped fourth quadrant, test
+     * angle zero first because the old exhaustive loop did. */
+    if (heading_y >= 0) {
+        if (heading_x >= 0) {
+            first_angle = 0;
+            last_angle = 64;
+        } else {
+            first_angle = 62;
+            last_angle = 128;
+        }
+    } else if (heading_x < 0) {
+        first_angle = 126;
+        last_angle = 192;
+    } else {
+        int32_t zero_score = (int32_t)heading_x * quarter_sine[64];
+
+        best_yaw = 0;
+        best_yaw_score = zero_score;
+        first_angle = 190;
+        last_angle = 255;
+    }
+
+    for (angle = first_angle; angle <= last_angle; ++angle) {
         fixed_t sine = angle_sine((uint8_t)angle);
         fixed_t cosine = angle_sine((uint8_t)(angle + 64u));
-        int32_t score;
-        if (heading_source == 0) {
-            score = (int32_t)state->forward.x * cosine +
-                (int32_t)state->forward.y * sine;
-        } else if (heading_source == 1) {
-            score = -(int32_t)state->right.x * sine +
-                (int32_t)state->right.y * cosine;
-        } else {
-            score = (int32_t)state->up.x * cosine +
-                (int32_t)state->up.y * sine;
-            if (state->pitch > 0) score = -score;
-        }
+        int32_t score = (int32_t)heading_x * cosine +
+            (int32_t)heading_y * sine;
+
         if (score > best_yaw_score) {
             best_yaw_score = score;
             best_yaw = (uint8_t)angle;
