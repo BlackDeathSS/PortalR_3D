@@ -1,0 +1,65 @@
+{
+  "rom": "C:/Users/refiorlk_admin/Documents/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/t3d3/bin/T3D3DEV.8xp"
+  ],
+  "target": {
+    "name": "T3D3DEV",
+    "isASM": true
+  },
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|600",
+    "hash|root",
+    "hash|palette",
+    "hold|math",
+    "delay|100",
+    "release|math",
+    "delay|500",
+    "hash|held_body",
+    "hold|y=",
+    "delay|250",
+    "release|y=",
+    "delay|200",
+    "hold|vars",
+    "delay|100",
+    "release|vars",
+    "delay|1500",
+    "hash|thrown_body",
+    "hash|body_state"
+  ],
+  "hashes": {
+    "root": {
+      "description": "True3D-compatible root view",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["3132DE74"]
+    },
+    "palette": {
+      "description": "T3D3 LCD palette",
+      "start": "lcdPalette",
+      "size": "lcdPalette_size",
+      "expected_CRCs": ["6B320453"]
+    },
+    "held_body": {
+      "description": "Projected held cube",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["AB073ECF", "6062CBA2", "8194C5BA", "97A5507A", "579D21ED"]
+    },
+    "thrown_body": {
+      "description": "Thrown cube after portal/room physics",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["375ED930", "7321D28D", "0B3E8E35", "7888E2D1", "2DDD8F6D"]
+    },
+    "body_state": {
+      "description": "Eight packed T3D3 body records at accepted renderer timing checkpoints",
+      "start": "0xD052C6",
+      "size": "0x1A8",
+      "expected_CRCs": ["F969C50E", "0D8050F3", "A269094B", "90842E7F", "D1224152", "A602C89B"]
+    }
+  }
+}

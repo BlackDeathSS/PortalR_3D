@@ -1,0 +1,73 @@
+{
+  "rom": "C:/Users/refiorlk_admin/Documents/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/t3d3/bin/T3D3DEV.8xp"
+  ],
+  "target": {
+    "name": "T3D3DEV",
+    "isASM": true
+  },
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|600",
+    "hold|math",
+    "delay|100",
+    "release|math",
+    "delay|200",
+    "hold|math",
+    "delay|100",
+    "release|math",
+    "delay|700",
+    "hold|up",
+    "delay|700",
+    "hash|pushed_view",
+    "hash|pushed_player",
+    "hash|pushed_body",
+    "delay|3000",
+    "release|up",
+    "delay|200",
+    "hash|blocked_view",
+    "hash|blocked_player",
+    "hash|blocked_body"
+  ],
+  "hashes": {
+    "pushed_view": {
+      "description": "Player pushing a free cube",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["0D0DC8AA", "B00ED10B", "9B2A9161", "C609C08E", "4BF06F3C"]
+    },
+    "pushed_player": {
+      "description": "Player state after pushing a free cube",
+      "start": "0xD1026C",
+      "size": "0x35",
+      "expected_CRCs": ["3335EE56", "E8056623", "25CA5B84", "AC41386A", "F5F112A1"]
+    },
+    "pushed_body": {
+      "description": "Body pool after player push",
+      "start": "0xD052C6",
+      "size": "0x1A8",
+      "expected_CRCs": ["F7D1CD58", "CDD8EE3C", "1FD3DEA1", "7EBEB4A5"]
+    },
+    "blocked_view": {
+      "description": "Cube and player stopped at the room boundary",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["9B8B38E6", "7C13B706", "7937A927", "8E3149FA"]
+    },
+    "blocked_player": {
+      "description": "Blocked player state",
+      "start": "0xD1026C",
+      "size": "0x35",
+      "expected_CRCs": ["A7852339", "1A8B440F"]
+    },
+    "blocked_body": {
+      "description": "Boundary-pinned body state",
+      "start": "0xD052C6",
+      "size": "0x1A8",
+      "expected_CRCs": ["3FA9A5D7"]
+    }
+  }
+}

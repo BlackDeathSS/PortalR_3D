@@ -1,0 +1,23 @@
+{
+  "format": "T3D2 runtime performance report v2",
+  "build_version": "0x26081005",
+  "scene_loaded": true,
+  "autotest": true,
+  "frames": 28,
+  "sampled_frames": 28,
+  "wall_seconds": 15.753631591796875,
+  "wall_fps": 1.7773679571496372,
+  "render_capacity_fps": {"average": 1.8241107623059842, "median": 1.241118097113855, "one_percent_low": 1.2311854217546496},
+  "frame_ms": {"mean": 548.2123238699777, "median": 805.72509765625, "p99": 812.225341796875, "maximum": 812.225341796875},
+  "phase_ms_per_frame": {"update": 14.021737234933036, "raster_and_portals": 534.4107491629464, "present": 13.768877301897321},
+  "logical_hash": "0x59E6DE62",
+  "player": {"position": [2.0, 0.0, 1.5], "cell": 0, "yaw": 220},
+  "portals": {"orange_active": true, "blue_active": true, "linked": true},
+  "contract": {"average_at_least_30": false, "one_percent_low_at_least_25": false, "p99_at_most_40_ms": false},
+  "renderer_work": {
+    "submitted_triangles": [11, 44, 32],
+    "shaded_samples": [4800, 1129, 112],
+    "dropped_meshlets": [0, 0, 9],
+    "phase_ms_per_frame": {"visibility_and_clear": 24.118695940290177, "transform": 31.507219587053573, "triangles": 233.78208705357142}
+  }
+}

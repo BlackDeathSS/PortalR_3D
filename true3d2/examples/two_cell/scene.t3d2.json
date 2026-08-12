@@ -1,0 +1,71 @@
+{
+  "format": "T3D2 scene v1",
+  "affine_max_edge": 12.0,
+  "procedural_texture": "portal_lab",
+  "spawn": {
+    "cell": "entry",
+    "position": [2.0, 0.0, 1.5]
+  },
+  "cells": [
+    {"name": "entry", "min": [0.0, -4.0, 0.0], "max": [8.0, 4.0, 4.0]},
+    {"name": "exit", "min": [8.0, -4.0, 0.0], "max": [16.0, 4.0, 4.0]}
+  ],
+  "gateways": [
+    {
+      "source": "entry",
+      "destination": "exit",
+      "two_way": true,
+      "vertices": [[8.0, -2.0, 0.0], [8.0, 2.0, 0.0], [8.0, 2.0, 3.0], [8.0, -2.0, 3.0]]
+    }
+  ],
+  "portal_surfaces": [
+    {
+      "cell": "entry",
+      "placeable": true,
+      "vertices": [[1.0, 4.0, 0.25], [7.0, 4.0, 0.25], [7.0, 4.0, 3.75], [1.0, 4.0, 3.75]]
+    },
+    {
+      "cell": "entry",
+      "placeable": true,
+      "vertices": [[7.0, -4.0, 0.25], [1.0, -4.0, 0.25], [1.0, -4.0, 3.75], [7.0, -4.0, 3.75]]
+    },
+    {
+      "cell": "entry",
+      "placeable": true,
+      "vertices": [[0.0, -3.0, 0.25], [0.0, 3.0, 0.25], [0.0, 3.0, 3.75], [0.0, -3.0, 3.75]]
+    },
+    {
+      "cell": "exit",
+      "placeable": true,
+      "vertices": [[9.0, 4.0, 0.25], [15.0, 4.0, 0.25], [15.0, 4.0, 3.75], [9.0, 4.0, 3.75]]
+    },
+    {
+      "cell": "exit",
+      "placeable": true,
+      "vertices": [[15.0, -4.0, 0.25], [9.0, -4.0, 0.25], [9.0, -4.0, 3.75], [15.0, -4.0, 3.75]]
+    },
+    {
+      "cell": "exit",
+      "placeable": true,
+      "vertices": [[16.0, 3.0, 0.25], [16.0, -3.0, 0.25], [16.0, -3.0, 3.75], [16.0, 3.0, 3.75]]
+    }
+  ],
+  "materials": [
+    {"name": "wall", "shade": 3, "mip_bias": 0},
+    {"name": "floor", "shade": 2, "mip_bias": 0},
+    {"name": "ceiling", "shade": 3, "mip_bias": 0},
+    {"name": "divider", "shade": 2, "mip_bias": 0}
+  ],
+  "meshes": [
+    {"obj": "scene.obj", "priority": 128, "essential": false}
+  ],
+  "bodies": [
+    {"shape": "box", "cell": "entry", "position": [3.0, 0.0, 1.0], "half_extent": [0.4, 0.4, 0.4]},
+    {"shape": "sphere", "cell": "exit", "position": [12.0, 0.0, 1.0], "half_extent": [0.35, 0.35, 0.35]}
+  ],
+  "certification": {
+    "views": [
+      {"name": "gateway", "triangles": [32, 20, 8], "samples": [3200, 800, 180]}
+    ]
+  }
+}

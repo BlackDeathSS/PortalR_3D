@@ -1,0 +1,12 @@
+{
+  "format": "T3D2 kernel gate report v1",
+  "build_version": "0x26081005",
+  "clock_rate": 32768,
+  "presenter": {"milliseconds": 13.767242431640625, "limit": 12.5, "pass": false},
+  "raster": {"milliseconds": 40.10009765625, "limit": 8.0, "samples": 4800, "pass": false},
+  "span_only": {"milliseconds": 25.054931640625, "samples": 4800},
+  "geometry": {"milliseconds": 117.401123046875, "limit": 4.0, "triangles": 96, "pass": false},
+  "all_gates_pass": false,
+  "presenter_hash": "0xE6F3C4AA",
+  "raster_hash": "0xBF3EE216"
+}

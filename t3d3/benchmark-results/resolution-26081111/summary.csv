@@ -1,0 +1,4 @@
+resolution,logical_pixels,layout,average_fps,median_fps,one_percent_low_fps,mean_frame_ms,frames_over_33_333_ms
+80x60,4800,no-body,31.771,34.187,16.576,31.475,345
+80x60,4800,root-eight,22.121,21.860,11.927,45.205,562
+80x60,4800,portal-eight,22.171,21.515,13.550,45.103,664

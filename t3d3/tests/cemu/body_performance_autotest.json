@@ -1,0 +1,27 @@
+{
+  "rom": "C:/Users/refiorlk_admin/Documents/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/t3d3/bin/T3D3LVAT.8xp.0.8xv",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/t3d3/bin/T3D3LVAT.8xp.1.8xv",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/t3d3/bin/T3D3LVAT.8xp"
+  ],
+  "target": {
+    "name": "T3D3LVAT",
+    "isASM": true
+  },
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|300000",
+    "hash|result"
+  ],
+  "hashes": {
+    "result": {
+      "description": "Intentional full-RAM dump after eight-body benchmark",
+      "start": "ram_start",
+      "size": "ram_size",
+      "expected_CRCs": ["00000000"]
+    }
+  }
+}

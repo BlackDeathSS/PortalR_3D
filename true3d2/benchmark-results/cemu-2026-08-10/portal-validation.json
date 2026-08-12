@@ -1,0 +1,30 @@
+{
+  "environment": "CEmu with supplied ROM; not hardware certification",
+  "build_version": "0x26081004",
+  "placement": {
+    "frames": 8,
+    "wall_fps": 5.420229923083285,
+    "render_capacity_fps": 6.229805841393569,
+    "one_percent_low_fps": 5.291135152591636,
+    "orange_active": true,
+    "blue_active": true,
+    "linked": true,
+    "yaw": 18,
+    "logical_hash": "0x27348E17"
+  },
+  "cancellation": {
+    "frames": 120,
+    "wall_fps": 8.363753155954678,
+    "render_capacity_fps": 8.61686531546042,
+    "one_percent_low_fps": 7.6560747663551405,
+    "orange_active": false,
+    "blue_active": false,
+    "linked": false,
+    "logical_hash": "0xB287F01D"
+  },
+  "visual_hashes": {
+    "root": "0x959D2446",
+    "angled_planar_portal": "0xF12E65BA",
+    "palette": "0x6A3852FF"
+  }
+}

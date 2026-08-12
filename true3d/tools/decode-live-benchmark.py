@@ -610,9 +610,6 @@ def _parse_header(payload: bytes) -> Header:
         "frame_count": FRAME_COUNT,
         "section_record_size": SECTION_RECORD_SIZE,
         "frame_record_size": FRAME_RECORD_SIZE,
-        "render_width": 64,
-        "render_height": 48,
-        "render_scale": 5,
         "recursion_limit": 1,
         "category_count": CATEGORY_COUNT,
         "counter_count": COUNTER_COUNT,
@@ -628,6 +625,17 @@ def _parse_header(payload: bytes) -> Header:
         actual = getattr(header, name)
         if actual != expected:
             raise DecodeError(f"{name} is {actual}; expected {expected}")
+    render_configuration = (
+        header.render_width,
+        header.render_height,
+        header.render_scale,
+    )
+    if render_configuration not in ((64, 48, 5), (80, 60, 4), (160, 120, 2)):
+        raise DecodeError(
+            "unsupported render configuration "
+            f"{header.render_width}x{header.render_height} at "
+            f"{header.render_scale}x"
+        )
     if header.report_size != len(payload):
         raise DecodeError(
             f"header declares {header.report_size} bytes, found {len(payload)}"

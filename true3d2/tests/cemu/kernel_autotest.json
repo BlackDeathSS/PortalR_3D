@@ -1,0 +1,27 @@
+{
+  "rom": "C:/Users/refiorlk_admin/Documents/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/true3d2/bin/T3D2KERN.8xp"
+  ],
+  "target": {
+    "name": "T3D2KERN",
+    "isASM": true
+  },
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|12000",
+    "hash|result"
+  ],
+  "hashes": {
+    "result": {
+      "description": "Intentional full-RAM dump containing T3DKERN",
+      "start": "ram_start",
+      "size": "ram_size",
+      "expected_CRCs": [
+        "00000000"
+      ]
+    }
+  }
+}

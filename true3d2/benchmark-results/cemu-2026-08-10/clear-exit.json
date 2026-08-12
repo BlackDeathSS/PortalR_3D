@@ -1,0 +1,11 @@
+{
+  "environment": "CEmu normal T3D2DEV build with supplied ROM",
+  "build_version": "0x26081004",
+  "clear_held_from_seconds": 1.5,
+  "clear_released_at_seconds": 2.25,
+  "valid_report_wall_seconds": 1.336212158203125,
+  "frames": 11,
+  "scene_loaded": true,
+  "autotest": false,
+  "normal_shutdown_report_written": true
+}

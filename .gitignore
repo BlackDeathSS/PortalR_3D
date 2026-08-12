@@ -1,2 +1,7 @@
 obj/
 bin/
+true3d2/examples/*/build/
+__pycache__/
+*.pyc
+true3d2/tests/cemu/failure_*_dump.bin
+t3d3/tests/cemu/failure_*_dump.bin

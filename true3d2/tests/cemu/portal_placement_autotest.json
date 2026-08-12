@@ -1,0 +1,48 @@
+{
+  "rom": "C:/Users/refiorlk_admin/Documents/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/true3d2/examples/two_cell/build/T3D2MAP.8xv",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/true3d2/examples/two_cell/build/T3D2G00.8xv",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/true3d2/examples/two_cell/build/T3D2TX0.8xv",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/true3d2/examples/two_cell/build/T3D2TX1.8xv",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/true3d2/examples/two_cell/build/T3D2MIP.8xv",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/true3d2/bin/T3D2AUTO.8xp"
+  ],
+  "target": {
+    "name": "T3D2AUTO",
+    "isASM": true
+  },
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|200",
+    "hold|mode",
+    "delay|150",
+    "release|mode",
+    "delay|100",
+    "hold|right",
+    "delay|300",
+    "release|right",
+    "delay|100",
+    "hold|alpha",
+    "delay|150",
+    "release|alpha",
+    "delay|500",
+    "hold|clear",
+    "delay|500",
+    "release|clear",
+    "delay|1000",
+    "hash|result"
+  ],
+  "hashes": {
+    "result": {
+      "description": "Intentional RAM dump; T3DFPS records portal link state",
+      "start": "ram_start",
+      "size": "ram_size",
+      "expected_CRCs": [
+        "00000000"
+      ]
+    }
+  }
+}
