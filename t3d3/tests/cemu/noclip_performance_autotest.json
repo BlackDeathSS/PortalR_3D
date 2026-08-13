@@ -1,0 +1,57 @@
+{
+  "rom": "C:/Users/refiorlk_admin/Documents/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/t3d3/bin/T3D3DEV.8xp"
+  ],
+  "target": {
+    "name": "T3D3DEV",
+    "isASM": true
+  },
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|600",
+    "hold|graph",
+    "delay|100",
+    "release|graph",
+    "delay|150",
+    "key|trace",
+    "delay|150",
+    "hold|up",
+    "delay|12000",
+    "release|up",
+    "delay|150",
+    "hash|away",
+    "hold|right",
+    "delay|1000",
+    "release|right",
+    "delay|150",
+    "hash|edge",
+    "hold|right",
+    "delay|600",
+    "release|right",
+    "delay|150",
+    "hash|visible"
+  ],
+  "hashes": {
+    "away": {
+      "description": "Intentional VRAM dump looking away from the room",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["00000000"]
+    },
+    "edge": {
+      "description": "Intentional VRAM dump with room near the frustum edge",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["00000000"]
+    },
+    "visible": {
+      "description": "Intentional VRAM dump with room centered",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["00000000"]
+    }
+  }
+}

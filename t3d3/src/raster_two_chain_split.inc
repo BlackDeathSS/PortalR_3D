@@ -14,18 +14,19 @@ typedef struct {
     uint8_t last_row;
     int24_t x_value;
     int24_t x_advance;
+    const ScreenPoint *point;
+    const ScreenPoint *begin;
+    const ScreenPoint *end;
 } RasterChain;
 
 static uint8_t raster_chain_begin_edge(
     RasterChain *chain,
-    const DrawPolygon *polygon,
     uint8_t row,
     uint8_t step
 ) {
     while (chain->edges_left != 0) {
-        uint8_t next;
-        ScreenPoint a = polygon->point[chain->vertex];
-        ScreenPoint b;
+        const ScreenPoint *a = chain->point;
+        const ScreenPoint *b;
         int24_t delta_x;
         int24_t delta_y;
         int32_t x_step;
@@ -33,31 +34,29 @@ static uint8_t raster_chain_begin_edge(
         int16_t last;
 
         if (chain->direction > 0) {
-            next = chain->vertex + 1u;
-            if (next == polygon->count) next = 0;
+            b = a + 1;
+            if (b == chain->end) b = chain->begin;
         } else {
-            next = chain->vertex == 0 ? polygon->count - 1u :
-                chain->vertex - 1u;
+            b = a == chain->begin ? chain->end - 1u : a - 1;
         }
-        chain->vertex = next;
+        chain->point = b;
         --chain->edges_left;
-        b = polygon->point[next];
-        if (a.y == b.y) continue;
-        if (a.y > b.y) return 0;
+        if (a->y == b->y) continue;
+        if (a->y > b->y) return 0;
 
-        delta_x = (int24_t)b.x - a.x;
-        delta_y = (int24_t)b.y - a.y;
-        first = ceil_q8((int24_t)a.y - FIXED_ONE / 2);
-        last = floor_q8((int24_t)b.y - 1 - FIXED_ONE / 2);
+        delta_x = (int24_t)b->x - a->x;
+        delta_y = (int24_t)b->y - a->y;
+        first = ceil_q8((int24_t)a->y - FIXED_ONE / 2);
+        last = floor_q8((int24_t)b->y - 1 - FIXED_ONE / 2);
         if (last < row) continue;
         if (first > row) return 0;
         if (last >= active_render_height) last = active_render_height - 1u;
 
         x_step = edge_x_step(delta_x, delta_y);
         chain->last_row = (uint8_t)last;
-        chain->x_value = a.x + (int24_t)(
+        chain->x_value = a->x + (int24_t)(
             (x_step *
-                ((int24_t)row * FIXED_ONE + FIXED_ONE / 2 - a.y)) >>
+                ((int24_t)row * FIXED_ONE + FIXED_ONE / 2 - a->y)) >>
             FIXED_SHIFT
         );
         chain->x_advance = (int24_t)(x_step * step);
@@ -109,13 +108,19 @@ static uint8_t rasterize_polygon_lod(
         (uint16_t)(((last_row - first_row) >> layer->lod_shift) + 1)
     );
     first_chain.vertex = polygon->top_vertex;
+    first_chain.point = &polygon->point[polygon->top_vertex];
+    first_chain.begin = polygon->point;
+    first_chain.end = polygon->point + polygon->count;
     first_chain.direction = 1;
     first_chain.edges_left = polygon->count;
     second_chain.vertex = polygon->top_vertex;
+    second_chain.point = &polygon->point[polygon->top_vertex];
+    second_chain.begin = polygon->point;
+    second_chain.end = polygon->point + polygon->count;
     second_chain.direction = -1;
     second_chain.edges_left = polygon->count;
-    if (!raster_chain_begin_edge(&first_chain, polygon, first_row, step) ||
-        !raster_chain_begin_edge(&second_chain, polygon, first_row, step)) {
+    if (!raster_chain_begin_edge(&first_chain, first_row, step) ||
+        !raster_chain_begin_edge(&second_chain, first_row, step)) {
         return 0;
     }
 
@@ -126,11 +131,11 @@ static uint8_t rasterize_polygon_lod(
         uint8_t last_column;
 
         if (row > first_chain.last_row &&
-            !raster_chain_begin_edge(&first_chain, polygon, row, step)) {
+            !raster_chain_begin_edge(&first_chain, row, step)) {
             return 0;
         }
         if (row > second_chain.last_row &&
-            !raster_chain_begin_edge(&second_chain, polygon, row, step)) {
+            !raster_chain_begin_edge(&second_chain, row, step)) {
             return 0;
         }
         left_value = first_chain.x_value;
@@ -192,13 +197,19 @@ static uint8_t rasterize_polygon_full(
         (uint16_t)(last_row - first_row + 1)
     );
     first_chain.vertex = polygon->top_vertex;
+    first_chain.point = &polygon->point[polygon->top_vertex];
+    first_chain.begin = polygon->point;
+    first_chain.end = polygon->point + polygon->count;
     first_chain.direction = 1;
     first_chain.edges_left = polygon->count;
     second_chain.vertex = polygon->top_vertex;
+    second_chain.point = &polygon->point[polygon->top_vertex];
+    second_chain.begin = polygon->point;
+    second_chain.end = polygon->point + polygon->count;
     second_chain.direction = -1;
     second_chain.edges_left = polygon->count;
-    if (!raster_chain_begin_edge(&first_chain, polygon, first_row, 1u) ||
-        !raster_chain_begin_edge(&second_chain, polygon, first_row, 1u)) {
+    if (!raster_chain_begin_edge(&first_chain, first_row, 1u) ||
+        !raster_chain_begin_edge(&second_chain, first_row, 1u)) {
         return 0;
     }
 
@@ -209,11 +220,11 @@ static uint8_t rasterize_polygon_full(
         uint8_t last_column;
 
         if (row > first_chain.last_row &&
-            !raster_chain_begin_edge(&first_chain, polygon, row, 1u)) {
+            !raster_chain_begin_edge(&first_chain, row, 1u)) {
             return 0;
         }
         if (row > second_chain.last_row &&
-            !raster_chain_begin_edge(&second_chain, polygon, row, 1u)) {
+            !raster_chain_begin_edge(&second_chain, row, 1u)) {
             return 0;
         }
         left_value = first_chain.x_value;

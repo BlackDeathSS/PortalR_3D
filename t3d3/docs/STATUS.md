@@ -1,4 +1,4 @@
-# T3D3 status - build 0x26081202
+# T3D3 status - build 0x26081304
 
 ## Completed foundation
 
@@ -71,21 +71,43 @@
   presenter pointer shuffles, and unrolled cache-cold 80x60 presentation.
 - Cache the equal-size cube's camera-space projected extent once per camera
   for every root and portal body-bound test.
+- Reject a complete off-screen room before corner projection and horizon setup
+  while developer noclip is outside the room. An enlarged frustum prevents
+  popping, and normal gameplay bypasses the added bounds work.
+- Split each 80x60 dirty-presenter group into independently compared 8-pixel
+  halves. Changed halves copy 32x4 physical blocks; uniform wall halves seed
+  one pixel and expand it with an overlapping `LDIR` constant-color run.
+- Cull hidden/opposite convex room faces when developer noclip is outside the
+  current room, and limit portal clip/shading setup to aperture rows.
+- Added a native 80x60 root scan-conversion kernel that retains a running row
+  pointer and removes per-row aperture lookups. The portal-clipped kernel now
+  advances cached aperture and destination cursors rather than reconstructing
+  all three addresses on every row.
+- Reject complete cube camera-space AABBs before vertex construction,
+  projection, clipping, and face rasterization. The shift-only frustum is a
+  conservative outer bound, so contributing cubes cannot be removed.
+- Use fixed-layout projection and quad setup for the common unclipped
+  full-detail cube path instead of generic variable-polygon bookkeeping.
+- Give the 20x15 far-portal state a deterministic principal-plane budget:
+  direct floor/ceiling bands plus the dominant forward wall. The 40x30 and
+  80x60 portal states retain complete room geometry.
 
 ## Validation
 
-The final 80x60 854-frame route retains the build `0x26081117` section hashes:
+The final 80x60 854-frame route retains deterministic state:
 
 - Route fingerprint: `0x90ABD6C8`
-- Exact logical-frame, presented-frame, and simulation-state hashes by section
+- Exact simulation-state hashes by section
 - Portal crossings: 4 at the same frames
+- Nine of ten logical/presented section hashes remain exact; the far-quarter
+  portal section changes intentionally under its 20x15 principal-plane budget
 
-Supplied-ROM CEmu 80x60 no-body result:
+Supplied-ROM CEmu 80x60 no-body result for build `0x26081304`:
 
-- Average: 34.752 FPS
-- Median: 36.694 FPS
-- 1% low: 19.331 FPS
-- Mean frame: 28.775 ms
+- Average: 37.20 FPS
+- Median: 39.34 FPS
+- 1% low: 19.75 FPS
+- Mean frame: 26.88 ms
 
 Seventeen focused body checks pass on the supplied ROM: five held/thrown/portal
 render-and-state checks, six push-and-wall-block checks, and three standing
@@ -99,13 +121,18 @@ Four additional noclip checks confirm that the camera can move beyond the room
 boundary with room 0 retained and `noclip=1`, then clamps back to the exact
 9.75-unit player boundary after noclip is disabled.
 
+The repeatable outside-room route now measures 148.3 FPS looking away, 148.0
+FPS while the room is fully outside the frustum, and 89.1 FPS with the exterior
+partially visible. Before the exterior-face and final hierarchical-presenter
+pass, those captures measured 128.0, 140.0, and 78.2 FPS respectively.
+
 Normal-build memory budget:
 
-- Resident program: 54,540 bytes
+- Resident program: 59,975 bytes
 - BSS: 45,019 bytes
 - Reserved stack: 4,096 bytes
-- Total: 103,655 / 153,600 bytes
-- Remaining: 49,945 bytes
+- Total: 109,090 / 153,600 bytes
+- Remaining: 44,510 bytes
 
 These are emulator measurements, not real-calculator certification.
 
@@ -135,16 +162,19 @@ four-box cap and removes the density-based 3-unit LOD cutoff:
 Against the original `0x26081102` eight-body baselines, the historical 64x48
 reference gained 81.1% in the root layout and 145.5% in the portal-destination
 layout. The current 80x60 development mode clears 25 FPS on average in both
-four-box layouts, but its 15.81-16.21 FPS 1% lows remain below the tail target.
+four-box layouts. Root-four now measures 32.35 FPS average / 16.94 FPS 1% low;
+portal-four measures 28.51 FPS average / 17.17 FPS 1% low. Root-four gains
+5.98% average and 5.66% at the 1% low over `0x26081303`. Resolution and the
+eight-unit cube LOD remain unchanged; only the smallest 20x15 portal state
+applies the documented principal-plane budget.
 Detailed artifacts and methodology are in
 [BODY_PERFORMANCE.md](BODY_PERFORMANCE.md).
 
 Resolution scaling results are documented in
 [RESOLUTION_PERFORMANCE.md](RESOLUTION_PERFORMANCE.md). With the accepted
 assembly scan/composite and frame-consistency passes, four-cube averages are
-now 26.41-29.14 FPS at 80x60. Every retained 80x60 capture has the same route
-fingerprint, crossings, and per-frame logical, presented, and simulation
-hashes.
+now 28.51-32.35 FPS at 80x60. Every retained 80x60 capture has the same route
+fingerprint, crossings, and per-frame simulation hashes.
 
 ## Next stage
 

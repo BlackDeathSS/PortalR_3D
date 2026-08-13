@@ -209,8 +209,75 @@ _present_low_frame_dirty_fast:
 	.endr
 	.endm
 
-/* 80x60 dirty presenter. Sixteen logical pixels form a 64x4 physical block,
- * cutting the group-loop overhead in half for the higher-detail mode. */
+/* Draw one changed eight-pixel half group and replicate its 32-pixel physical
+ * row three times.  The caller keeps BC as the row/group counters. */
+	.macro	present_dirty_half_4
+	push	bc
+	/* Flat walls frequently change as one solid run.  Detect that case after
+	 * the cache mismatch and expand one source value directly. */
+	ld	a, (ix)
+	/* Test the far endpoint first: mixed edge groups usually reject after one
+	 * comparison, while truly solid groups still take the direct-fill path. */
+	.irp	offset,7,4,1,2,3,5,6
+	cp	a, (ix + \offset)
+	jp	nz, .Ldirty80_half_pixels\@
+	.endr
+	lea	ix, ix + 8
+	.rept	8
+	ld	(iy), a
+	inc	iy
+	.endr
+	/* Seed one physical pixel, then use an overlapping LDIR as a 32-byte
+	 * constant-color fill.  This is substantially cheaper than expanding the
+	 * eight identical logical pixels one at a time. */
+	ld	(de), a
+	push	de
+	pop	hl
+	inc	de
+	ld	bc, 31
+	ldir
+	jp	.Ldirty80_half_expand\@
+.Ldirty80_half_pixels\@:
+	.rept	8
+	present_dirty_pixel_4
+	.endr
+.Ldirty80_half_expand\@:
+	push	ix
+	push	iy
+	push	de
+	push	de
+	pop	hl
+	ld	bc, 32
+	or	a, a
+	sbc	hl, bc
+	ex	de, hl
+	ld	bc, 288
+	add	hl, bc
+	ex	de, hl
+	ld	bc, 32
+	ldir
+	.rept	2
+	push	de
+	pop	hl
+	ld	bc, 32
+	or	a, a
+	sbc	hl, bc
+	ex	de, hl
+	ld	bc, 288
+	add	hl, bc
+	ex	de, hl
+	ld	bc, 32
+	ldir
+	.endr
+	pop	de
+	pop	iy
+	pop	ix
+	pop	bc
+	.endm
+
+/* 80x60 hierarchical dirty presenter. Sixteen logical pixels remain the
+ * outer group, but each eight-pixel half is compared and copied separately.
+ * Sparse wall/portal edges therefore update 32x4 instead of 64x4 pixels. */
 	.section	.text._present_low_frame_dirty_80_fast,"ax",@progbits
 _present_low_frame_dirty_80_fast:
 	push	ix
@@ -226,41 +293,38 @@ _present_low_frame_dirty_80_fast:
 .Ldirty80_row:
 	ld	c, 5
 .Ldirty80_group:
+	/* Cheap outer rejection: unchanged 16-pixel groups never pay either
+	 * eight-pixel comparison. */
 	exx
 	ld	hl, (ix)
 	ld	bc, (iy)
 	or	a, a
 	sbc	hl, bc
-	jr	nz, .Ldirty80_compare_alt
+	jr	nz, .Ldirty80_outer_compare_alt
 	ld	hl, (ix + 3)
 	ld	bc, (iy + 3)
 	or	a, a
 	sbc	hl, bc
-	jr	nz, .Ldirty80_compare_alt
+	jr	nz, .Ldirty80_outer_compare_alt
 	ld	hl, (ix + 6)
 	ld	bc, (iy + 6)
 	or	a, a
 	sbc	hl, bc
-	jr	nz, .Ldirty80_compare_alt
+	jr	nz, .Ldirty80_outer_compare_alt
 	ld	hl, (ix + 9)
 	ld	bc, (iy + 9)
 	or	a, a
 	sbc	hl, bc
-	jr	nz, .Ldirty80_compare_alt
+	jr	nz, .Ldirty80_outer_compare_alt
 	ld	hl, (ix + 12)
 	ld	bc, (iy + 12)
 	or	a, a
 	sbc	hl, bc
-	jr	nz, .Ldirty80_compare_alt
+	jr	nz, .Ldirty80_outer_compare_alt
 	exx
 	ld	a, (ix + 15)
 	cp	a, (iy + 15)
-	jp	nz, .Ldirty80_draw_group
-	jp	.Ldirty80_group_unchanged
-.Ldirty80_compare_alt:
-	exx
-	jp	.Ldirty80_draw_group
-.Ldirty80_group_unchanged:
+	jp	nz, .Ldirty80_split_group
 	lea	ix, ix + 16
 	lea	iy, iy + 16
 	push	bc
@@ -270,42 +334,78 @@ _present_low_frame_dirty_80_fast:
 	ex	de, hl
 	pop	bc
 	jp	.Ldirty80_group_done
-.Ldirty80_draw_group:
+.Ldirty80_outer_compare_alt:
+	exx
+.Ldirty80_split_group:
+	/* First eight-pixel half. */
+	exx
+	ld	hl, (ix)
+	ld	bc, (iy)
+	or	a, a
+	sbc	hl, bc
+	jr	nz, .Ldirty80_first_compare_alt
+	ld	hl, (ix + 3)
+	ld	bc, (iy + 3)
+	or	a, a
+	sbc	hl, bc
+	jr	nz, .Ldirty80_first_compare_alt
+	exx
+	ld	a, (ix + 6)
+	cp	a, (iy + 6)
+	jr	nz, .Ldirty80_draw_first
+	ld	a, (ix + 7)
+	cp	a, (iy + 7)
+	jr	nz, .Ldirty80_draw_first
+	lea	ix, ix + 8
+	lea	iy, iy + 8
 	push	bc
-	.rept	16
-	present_dirty_pixel_4
-	.endr
-	push	ix
-	push	iy
-	push	de
-	push	de
-	pop	hl
-	ld	bc, 64
-	or	a, a
-	sbc	hl, bc
 	ex	de, hl
-	ld	bc, 256
+	ld	bc, 32
 	add	hl, bc
 	ex	de, hl
-	ld	bc, 64
-	ldir
-	.rept	2
-	push	de
-	pop	hl
-	ld	bc, 64
-	or	a, a
-	sbc	hl, bc
-	ex	de, hl
-	ld	bc, 256
-	add	hl, bc
-	ex	de, hl
-	ld	bc, 64
-	ldir
-	.endr
-	pop	de
-	pop	iy
-	pop	ix
 	pop	bc
+	jp	.Ldirty80_second
+.Ldirty80_first_compare_alt:
+	exx
+
+.Ldirty80_draw_first:
+	present_dirty_half_4
+
+.Ldirty80_second:
+	/* Second eight-pixel half. */
+	exx
+	ld	hl, (ix)
+	ld	bc, (iy)
+	or	a, a
+	sbc	hl, bc
+	jr	nz, .Ldirty80_second_compare_alt
+	ld	hl, (ix + 3)
+	ld	bc, (iy + 3)
+	or	a, a
+	sbc	hl, bc
+	jr	nz, .Ldirty80_second_compare_alt
+	exx
+	ld	a, (ix + 6)
+	cp	a, (iy + 6)
+	jr	nz, .Ldirty80_draw_second
+	ld	a, (ix + 7)
+	cp	a, (iy + 7)
+	jr	nz, .Ldirty80_draw_second
+	lea	ix, ix + 8
+	lea	iy, iy + 8
+	push	bc
+	ex	de, hl
+	ld	bc, 32
+	add	hl, bc
+	ex	de, hl
+	pop	bc
+	jp	.Ldirty80_group_done
+.Ldirty80_second_compare_alt:
+	exx
+
+.Ldirty80_draw_second:
+	present_dirty_half_4
+
 .Ldirty80_group_done:
 	dec	c
 	jp	nz, .Ldirty80_group

@@ -1,5 +1,62 @@
 # Movable-body performance report
 
+Build `0x26081304` targets geometry before rasterization. Complete cube AABBs
+are rejected against a conservative camera-space frustum before any corners,
+projected vertices, clipped faces, or scanlines are produced. Unclipped
+full-detail cube faces use a fixed four-point setup, and the 20x15 far-portal
+state uses direct floor/ceiling depth bands plus its dominant forward wall.
+The half- and full-resolution portal states retain all room faces, and the
+eight-unit full-detail cube LOD distance is unchanged.
+
+| Layout | `0x26081303` average | `0x26081304` average | Old 1% low | New 1% low |
+|---|---:|---:|---:|---:|
+| No bodies | 36.60 FPS | 37.20 FPS | 19.52 FPS | 19.75 FPS |
+| Four root cubes | 30.53 FPS | 32.35 FPS | 16.03 FPS | 16.94 FPS |
+| Four portal cubes | 27.51 FPS | 28.51 FPS | 16.92 FPS | 17.17 FPS |
+
+Root-four improves 5.98% in average FPS and 5.66% at the 1% low. All 854
+per-frame simulation hashes, the route fingerprint, and four crossing frames
+remain exact. One far-quarter-portal section intentionally has a new logical
+and presented hash because of the 20x15 principal-plane budget; every other
+section remains pixel-exact. Final captures are in
+`benchmark-results/resolution-26081304/80x60`.
+
+Build `0x26081303` specializes full-resolution root scan conversion and caches
+portal aperture/destination row cursors. Root-four improves from 29.67 to 30.53
+FPS average and from 15.57 to 16.03 FPS at the 1% low. Portal-four improves
+from 26.81 to 27.51 FPS average and from 16.72 to 16.92 FPS at the 1% low.
+All route state, logical-frame, and presented-frame hashes remain exact; the
+eight-unit full-detail cube range is unchanged. The no-body route improves
+from 35.51 to 36.60 FPS average and from 19.28 to 19.52 FPS at the 1% low.
+Final captures are in `benchmark-results/resolution-26081303/80x60`.
+
+## Noclip whole-room rejection
+
+Build `0x26081302` adds a hierarchical 16-to-8-pixel dirty presenter, direct
+solid half-run fills, exterior noclip face selection, and aperture-row-limited
+portal setup/shading. The supplied-ROM 80x60 route measures 35.51 FPS average /
+19.28 FPS 1% low with no cubes, 29.67 / 15.57 with root-four, and 26.81 / 16.72
+with portal-four. Portal-four improves from 26.41 / 16.21; root-four improves
+slightly in average while its tail remains effectively unchanged.
+The outside-room fixture measures 148.3 FPS looking away, 148.0 FPS with the
+room fully beyond the frustum, and 89.1 FPS with an exterior face visible.
+Final decoded captures are stored under
+`benchmark-results/resolution-26081302/80x60`.
+
+Build `0x26081301` adds a noclip-only whole-room camera-space AABB rejection
+before corner projection, horizon-row setup, face scanning, portal setup, and
+body rendering. The test frustum is enlarged by eight base-resolution pixels
+on every side; borderline rooms use the unchanged exact renderer. The
+repeatable supplied-ROM CEmu route measures 128.0 FPS looking away versus
+88.3 FPS without the guard, and 140.0 versus 99.6 FPS while turning with the
+room still outside the framebuffer. A partially visible distant room is
+effectively unchanged at 78.2 versus 79.1 FPS.
+
+The normal deterministic route bypasses the noclip guard and remains exact:
+34.75 FPS average, 19.33 FPS 1% low, route fingerprint `0x90ABD6C8`, four
+crossings, and matching state/logical/presented hashes. The permanent sentinel
+capture is `tests/cemu/noclip_performance_autotest.json`.
+
 ## Four-body / eight-unit LOD checkpoint
 
 Build `0x26081202` caps the gameplay pool at four boxes and removes the former

@@ -28,6 +28,8 @@
 #define VIEW_CENTER_Y (RENDER_HEIGHT / 2)
 #define PROJECTION_FOCAL 42
 #define NEAR_PLANE 32
+#define ROOM_CULL_HALF_WIDTH 40
+#define ROOM_CULL_HALF_HEIGHT 32
 #define PROJECTED_LIMIT 1048576L
 #define PROJECTION_TABLE_SHIFT 2
 #define PROJECTION_TABLE_SIZE 2048
@@ -217,6 +219,14 @@ void project_camera_xy_pair_exact(
     const CameraPoint *second,
     ScreenPoint *second_result
 );
+void project_box_vertices_80(
+    uint8_t mask,
+    const CameraPoint *camera_points,
+    ScreenPoint *screen_points,
+    uint8_t *projectable,
+    const uint16_t *near_scale,
+    const uint16_t *far_scale
+);
 
 typedef struct {
     ScreenPoint point[MAX_POLYGON_VERTICES];
@@ -324,6 +334,14 @@ static const uint8_t vertex_mask_bit[8] = {
 };
 static const uint8_t box_face_vertex_mask[ROOM_FACE_COUNT] = {
     0x0Fu, 0xF0u, 0x33u, 0xCCu, 0x99u, 0x66u
+};
+static const uint8_t box_face_screen_byte_offset[ROOM_FACE_COUNT][4] = {
+    {0u, 18u, 12u, 6u},
+    {24u, 30u, 36u, 42u},
+    {0u, 6u, 30u, 24u},
+    {18u, 42u, 36u, 12u},
+    {0u, 24u, 42u, 18u},
+    {6u, 12u, 36u, 30u}
 };
 
 /* Quarter-wave Q8 sine table. Angles use 256 units per turn. */
@@ -709,6 +727,19 @@ static ScreenPoint project_camera_point(const CameraPoint *point) {
  * with one scale lookup and one assembly ABI frame per pair. The mask lets the
  * body path omit vertices that are not referenced by any camera-facing face. */
 static void project_cached_box_vertices(uint8_t mask) {
+#if RENDER_WIDTH == 80 && !TRUE3D_BENCHMARK_COUNTERS
+    if (active_render_shift == 0u) {
+        project_box_vertices_80(
+            mask,
+            camera_vertices,
+            screen_vertices,
+            vertex_projectable,
+            projection_scale_table,
+            far_projection_scale_table
+        );
+        return;
+    }
+#endif
     static const uint8_t axis_pairs[3][8] = {
         {0, 1, 3, 2, 4, 5, 7, 6},
         {0, 3, 1, 2, 4, 7, 5, 6},
@@ -929,6 +960,48 @@ static uint8_t polygon_intersects_layer(
     );
 }
 
+/* Full-detail body faces are unclipped quads in the common close-range path.
+ * Their fixed four-point setup does not need the generic 3..8 vertex loop or
+ * portal-LOD bound expansion. */
+static uint8_t body_quad_intersects_layer(
+    DrawPolygon *polygon,
+    const RenderLayer *layer
+) {
+    int24_t minimum_x = polygon->point[0].x;
+    int24_t maximum_x = minimum_x;
+    int24_t minimum_y = polygon->point[0].y;
+    int24_t maximum_y = minimum_y;
+    uint8_t top_vertex = 0;
+    uint8_t index;
+
+    for (index = 1u; index < 4u; ++index) {
+        int24_t x = polygon->point[index].x;
+        int24_t y = polygon->point[index].y;
+
+        if (x < minimum_x) minimum_x = x;
+        if (x > maximum_x) maximum_x = x;
+        if (y < minimum_y) {
+            minimum_y = y;
+            top_vertex = index;
+        }
+        if (y > maximum_y) maximum_y = y;
+    }
+    polygon->top_vertex = top_vertex;
+    polygon->sample_first_row = (int16_t)(
+        (minimum_y - FIXED_ONE / 2 + FIXED_ONE - 1) >> FIXED_SHIFT
+    );
+    polygon->sample_last_row = (int16_t)(
+        (maximum_y - 1 - FIXED_ONE / 2) >> FIXED_SHIFT
+    );
+    return (uint8_t)(
+        layer->first_row <= layer->last_row &&
+        maximum_x >= (int24_t)layer->bound_left * FIXED_ONE &&
+        minimum_x < (int24_t)(layer->bound_right + 1u) * FIXED_ONE &&
+        maximum_y >= (int24_t)layer->first_row * FIXED_ONE &&
+        minimum_y < (int24_t)(layer->last_row + 1u) * FIXED_ONE
+    );
+}
+
 static CameraPoint camera_point_add(CameraPoint left, CameraPoint right) {
     CameraPoint result = {
         left.x + right.x,
@@ -938,7 +1011,86 @@ static CameraPoint camera_point_add(CameraPoint left, CameraPoint right) {
     return result;
 }
 
-static void transform_world_vertices(const Camera *camera) {
+/* Reject a room only when its complete camera-space AABB is outside one
+ * conservative frustum plane.  The normal 80x60 projection has half extents
+ * 40x30; the extra vertical guard protects table quantization and raster
+ * rounding at the top and bottom edges. */
+static uint8_t room_camera_bounds_visible(void) {
+    fixed_t maximum_depth = camera_vertices[0].depth;
+    fixed_t minimum_x;
+    fixed_t maximum_x;
+    fixed_t minimum_y;
+    fixed_t maximum_y;
+    uint8_t index;
+
+    for (index = 1; index < 8u; ++index) {
+        if (camera_vertices[index].depth > maximum_depth) {
+            maximum_depth = camera_vertices[index].depth;
+        }
+    }
+    /* Looking entirely away from the room is the common fast case. */
+    if (maximum_depth < NEAR_PLANE) return 0;
+
+    minimum_x = maximum_x = camera_vertices[0].x;
+    minimum_y = maximum_y = camera_vertices[0].y;
+    for (index = 1; index < 8u; ++index) {
+        if (camera_vertices[index].x < minimum_x) {
+            minimum_x = camera_vertices[index].x;
+        }
+        if (camera_vertices[index].x > maximum_x) {
+            maximum_x = camera_vertices[index].x;
+        }
+        if (camera_vertices[index].y < minimum_y) {
+            minimum_y = camera_vertices[index].y;
+        }
+        if (camera_vertices[index].y > maximum_y) {
+            maximum_y = camera_vertices[index].y;
+        }
+    }
+    if ((int32_t)PROJECTION_FOCAL * maximum_x +
+            (int32_t)ROOM_CULL_HALF_WIDTH * maximum_depth < 0) {
+        return 0;
+    }
+    if ((int32_t)PROJECTION_FOCAL * minimum_x -
+            (int32_t)ROOM_CULL_HALF_WIDTH * maximum_depth >= 0) {
+        return 0;
+    }
+    if ((int32_t)PROJECTION_FOCAL * minimum_y -
+            (int32_t)ROOM_CULL_HALF_HEIGHT * maximum_depth > 0) {
+        return 0;
+    }
+    if (-(int32_t)PROJECTION_FOCAL * maximum_y -
+            (int32_t)ROOM_CULL_HALF_HEIGHT * maximum_depth >= 0) {
+        return 0;
+    }
+    return 1;
+}
+
+/* A convex room viewed from outside exposes only the boundary planes on the
+ * camera side.  Avoid projecting and scan-converting the opposite/interior
+ * faces during noclip inspection.  Normal gameplay remains the six-face
+ * interior renderer. */
+static uint8_t room_exterior_face_mask(
+    const Camera *camera,
+    const Room *room,
+    uint8_t allow_room_cull
+) {
+    uint8_t mask = 0;
+
+    if (!allow_room_cull) return 0x3Fu;
+    if (camera->position.z < room->minimum_z) mask |= 1u << 0;
+    if (camera->position.z > room->maximum_z) mask |= 1u << 1;
+    if (camera->position.y < room->minimum_y) mask |= 1u << 2;
+    if (camera->position.y > room->maximum_y) mask |= 1u << 3;
+    if (camera->position.x < room->minimum_x) mask |= 1u << 4;
+    if (camera->position.x > room->maximum_x) mask |= 1u << 5;
+    return mask == 0 ? 0x3Fu : mask;
+}
+
+static uint8_t transform_world_vertices(
+    const Camera *camera,
+    uint8_t allow_room_cull
+) {
     const Room *room = &rooms[camera->room];
     Vec3 minimum = {room->minimum_x, room->minimum_y, room->minimum_z};
     fixed_t extent_x = room->maximum_x - room->minimum_x;
@@ -966,7 +1118,18 @@ static void transform_world_vertices(const Camera *camera) {
     camera_vertices[first + 5] = camera_point_add(camera_vertices[first + 1], edge[2]);
     camera_vertices[first + 7] = camera_point_add(camera_vertices[first + 3], edge[2]);
     camera_vertices[first + 6] = camera_point_add(camera_vertices[first + 2], edge[2]);
+    if (allow_room_cull &&
+        (camera->position.x < room->minimum_x ||
+         camera->position.x > room->maximum_x ||
+         camera->position.y < room->minimum_y ||
+         camera->position.y > room->maximum_y ||
+         camera->position.z < room->minimum_z ||
+         camera->position.z > room->maximum_z) &&
+        !room_camera_bounds_visible()) {
+        return 0;
+    }
     project_cached_box_vertices(0xFFu);
+    return 1;
 }
 
 static uint8_t rasterize_polygon(
@@ -1082,9 +1245,16 @@ static void append_portal_polygon(
     ++layer->count;
 }
 
-static void prepare_room_geometry(RenderLayer *layer, const Camera *camera) {
+static uint8_t prepare_room_geometry(
+    RenderLayer *layer,
+    const Camera *camera,
+    uint8_t allow_room_cull
+) {
+    uint8_t first_horizon_row;
+    uint8_t last_horizon_row;
     uint8_t row;
 
+    if (!transform_world_vertices(camera, allow_room_cull)) return 0;
     layer->horizon_valid = (uint8_t)(
         fixed_absolute(camera->right.z) <= 8 &&
         fixed_absolute(camera->up.z) >= 64
@@ -1100,7 +1270,23 @@ static void prepare_room_geometry(RenderLayer *layer, const Camera *camera) {
         int16_t horizon = (int16_t)(VIEW_CENTER_Y + horizon_offset);
         if (active_render_shift != 0) horizon = (int16_t)half_projected(horizon);
         layer->horizon_row = horizon;
-        for (row = 0; row < active_render_height; ++row) {
+        first_horizon_row = layer->first_row;
+        last_horizon_row = layer->last_row;
+        if (layer->lod_shift != 0) {
+            first_horizon_row = (uint8_t)(
+                (first_horizon_row >> layer->lod_shift) << layer->lod_shift
+            );
+            last_horizon_row = (uint8_t)(
+                (((last_horizon_row >> layer->lod_shift) + 1u) <<
+                 layer->lod_shift) - 1u
+            );
+            if (last_horizon_row >= active_render_height) {
+                last_horizon_row = active_render_height - 1u;
+            }
+        }
+        /* Portal children never sample shading outside their aperture rows.
+         * Root rendering still initializes the complete logical height. */
+        for (row = first_horizon_row; row <= last_horizon_row; ++row) {
             int16_t distance = (int16_t)row - horizon;
 
             if (distance < 0) distance = -distance;
@@ -1108,7 +1294,7 @@ static void prepare_room_geometry(RenderLayer *layer, const Camera *camera) {
                 2u : (distance < active_horizon_far_limit ? 1u : 0u);
         }
     }
-    transform_world_vertices(camera);
+    return 1;
 }
 
 static __attribute__((unused)) void collect_room_polygons(
@@ -1123,7 +1309,10 @@ static __attribute__((unused)) void collect_room_polygons(
     uint8_t portal_index;
 
     layer->count = 0;
-    prepare_room_geometry(layer, camera);
+    if (!prepare_room_geometry(layer, camera, 0)) {
+        layer->solid_count = 0;
+        return;
+    }
     for (offset = 0; offset < ROOM_FACE_COUNT; ++offset) {
         uint8_t face_index = room->first_face + offset;
 
@@ -1468,7 +1657,7 @@ static uint8_t rasterize_polygon(
 #include "raster_two_chain_split.inc"
 
 #if RENDER_WIDTH == 80 && !TRUE3D_BENCHMARK_COUNTERS
-_Static_assert(sizeof(RasterChain) == 10u, "Assembly RasterChain size mismatch");
+_Static_assert(sizeof(RasterChain) == 19u, "Assembly RasterChain size mismatch");
 _Static_assert(
     offsetof(RasterChain, last_row) == 3u &&
     offsetof(RasterChain, x_value) == 4u &&
@@ -1486,6 +1675,14 @@ void raster_fill_segment_80(
     RasterChain *first_chain,
     RasterChain *second_chain,
     const RenderLayer *layer,
+    uint8_t first_row,
+    uint8_t last_row,
+    uint8_t base_color,
+    uint8_t horizon_shaded
+);
+void raster_fill_root_segment_80(
+    RasterChain *first_chain,
+    RasterChain *second_chain,
     uint8_t first_row,
     uint8_t last_row,
     uint8_t base_color,
@@ -1839,8 +2036,6 @@ static uint8_t build_portal_clip(
     uint8_t last_row;
     uint8_t any = 0;
 
-    memset(child->row_left, 255, sizeof(child->row_left));
-    memset(child->row_right, 0, sizeof(child->row_right));
     child->first_row = active_render_height;
     child->last_row = 0;
     child->bound_left = active_render_width;
@@ -1855,6 +2050,12 @@ static uint8_t build_portal_clip(
     for (row = first_row; row <= last_row; ++row) {
         uint8_t first_column;
         uint8_t last_column;
+
+        /* Only rows touched by this aperture can be consumed by child
+         * rendering or composition.  Initializing this exact interval avoids
+         * clearing both complete 60-row clip arrays for every portal. */
+        child->row_left[row] = 255u;
+        child->row_right[row] = 0u;
         if (portal_polygon->span_left[row] > portal_polygon->span_right[row] ||
             parent->row_left[row] > parent->row_right[row]) {
             continue;
@@ -2057,13 +2258,19 @@ static void rasterize_fill_polygon_full(
 
     RENDER_BENCHMARK_COUNT(raster_rows, (uint16_t)(last_row - first_row + 1));
     first_chain.vertex = polygon->top_vertex;
+    first_chain.point = &polygon->point[polygon->top_vertex];
+    first_chain.begin = polygon->point;
+    first_chain.end = polygon->point + polygon->count;
     first_chain.direction = 1;
     first_chain.edges_left = polygon->count;
     second_chain.vertex = polygon->top_vertex;
+    second_chain.point = &polygon->point[polygon->top_vertex];
+    second_chain.begin = polygon->point;
+    second_chain.end = polygon->point + polygon->count;
     second_chain.direction = -1;
     second_chain.edges_left = polygon->count;
-    if (!raster_chain_begin_edge(&first_chain, polygon, first_row, 1u) ||
-        !raster_chain_begin_edge(&second_chain, polygon, first_row, 1u)) {
+    if (!raster_chain_begin_edge(&first_chain, first_row, 1u) ||
+        !raster_chain_begin_edge(&second_chain, first_row, 1u)) {
         return;
     }
 
@@ -2073,25 +2280,36 @@ static void rasterize_fill_polygon_full(
         uint8_t segment_last;
 
         if (row > first_chain.last_row &&
-            !raster_chain_begin_edge(&first_chain, polygon, row, 1u)) {
+            !raster_chain_begin_edge(&first_chain, row, 1u)) {
             return;
         }
         if (row > second_chain.last_row &&
-            !raster_chain_begin_edge(&second_chain, polygon, row, 1u)) {
+            !raster_chain_begin_edge(&second_chain, row, 1u)) {
             return;
         }
         segment_last = first_chain.last_row < second_chain.last_row ?
             first_chain.last_row : second_chain.last_row;
         if (segment_last > last_row) segment_last = last_row;
-        raster_fill_segment_80(
-            &first_chain,
-            &second_chain,
-            layer,
-            row,
-            segment_last,
-            base_color,
-            horizon_shaded
-        );
+        if (layer == &render_layers[0] && active_render_width == 80u) {
+            raster_fill_root_segment_80(
+                &first_chain,
+                &second_chain,
+                row,
+                segment_last,
+                base_color,
+                horizon_shaded
+            );
+        } else {
+            raster_fill_segment_80(
+                &first_chain,
+                &second_chain,
+                layer,
+                row,
+                segment_last,
+                base_color,
+                horizon_shaded
+            );
+        }
         row = segment_last + 1u;
     }
 #else
@@ -2102,11 +2320,11 @@ static void rasterize_fill_polygon_full(
         uint8_t last_column;
 
         if (row > first_chain.last_row &&
-            !raster_chain_begin_edge(&first_chain, polygon, row, 1u)) {
+            !raster_chain_begin_edge(&first_chain, row, 1u)) {
             return;
         }
         if (row > second_chain.last_row &&
-            !raster_chain_begin_edge(&second_chain, polygon, row, 1u)) {
+            !raster_chain_begin_edge(&second_chain, row, 1u)) {
             return;
         }
         left_value = first_chain.x_value;
@@ -2194,13 +2412,19 @@ static void rasterize_fill_polygon_lod(
         (uint16_t)(((last_row - first_row) >> shift) + 1)
     );
     first_chain.vertex = polygon->top_vertex;
+    first_chain.point = &polygon->point[polygon->top_vertex];
+    first_chain.begin = polygon->point;
+    first_chain.end = polygon->point + polygon->count;
     first_chain.direction = 1;
     first_chain.edges_left = polygon->count;
     second_chain.vertex = polygon->top_vertex;
+    second_chain.point = &polygon->point[polygon->top_vertex];
+    second_chain.begin = polygon->point;
+    second_chain.end = polygon->point + polygon->count;
     second_chain.direction = -1;
     second_chain.edges_left = polygon->count;
-    if (!raster_chain_begin_edge(&first_chain, polygon, first_row, step) ||
-        !raster_chain_begin_edge(&second_chain, polygon, first_row, step)) {
+    if (!raster_chain_begin_edge(&first_chain, first_row, step) ||
+        !raster_chain_begin_edge(&second_chain, first_row, step)) {
         return;
     }
 
@@ -2211,11 +2435,11 @@ static void rasterize_fill_polygon_lod(
         uint8_t segment_last;
 
         if (row > first_chain.last_row &&
-            !raster_chain_begin_edge(&first_chain, polygon, row, step)) {
+            !raster_chain_begin_edge(&first_chain, row, step)) {
             return;
         }
         if (row > second_chain.last_row &&
-            !raster_chain_begin_edge(&second_chain, polygon, row, step)) {
+            !raster_chain_begin_edge(&second_chain, row, step)) {
             return;
         }
         edge_last = first_chain.last_row < second_chain.last_row ?
@@ -2244,11 +2468,11 @@ static void rasterize_fill_polygon_lod(
         uint8_t last_column;
 
         if (row > first_chain.last_row &&
-            !raster_chain_begin_edge(&first_chain, polygon, row, step)) {
+            !raster_chain_begin_edge(&first_chain, row, step)) {
             return;
         }
         if (row > second_chain.last_row &&
-            !raster_chain_begin_edge(&second_chain, polygon, row, step)) {
+            !raster_chain_begin_edge(&second_chain, row, step)) {
             return;
         }
         left_value = first_chain.x_value;
@@ -2502,6 +2726,41 @@ static uint8_t body_fast_projected_bounds(
     );
 }
 
+/* Reject complete body AABBs against the current camera frustum before the
+ * eight corners are built and projected. This is especially important for a
+ * close row of cubes: the outer cubes can be wholly outside the 80x60 view
+ * while their centers are still in front of the camera. */
+static uint8_t body_camera_bounds_visible(
+    CameraPoint center,
+    const CameraPoint *extent
+) {
+    fixed_t maximum_depth = center.depth + extent->depth;
+    fixed_t horizontal_limit;
+    fixed_t vertical_limit;
+
+    if (maximum_depth < NEAR_PLANE) return 0;
+    /* 61/64 and 49/64 are conservative outer bounds for the real 40/42 and
+     * 32/42 frustum ratios. The two-bit decompositions stay multiply-free;
+     * two fixed-point units cover truncation at the exact edge. */
+    horizontal_limit = maximum_depth - (maximum_depth >> 5) -
+        (maximum_depth >> 6) + 2;
+    vertical_limit = maximum_depth - (maximum_depth >> 2) +
+        (maximum_depth >> 6) + 2;
+    if (center.x + extent->x < -horizontal_limit) {
+        return 0;
+    }
+    if (center.x - extent->x >= horizontal_limit) {
+        return 0;
+    }
+    if (center.y - extent->y > vertical_limit) {
+        return 0;
+    }
+    if (-(center.y + extent->y) >= vertical_limit) {
+        return 0;
+    }
+    return 1;
+}
+
 static __attribute__((unused)) Vec3 body_face_inward(
     const T3D3Body *body,
     uint8_t face_offset
@@ -2568,6 +2827,19 @@ static uint8_t body_projected_bounds(
     return (uint8_t)(
         *first_column <= *last_column && *first_row <= *last_row
     );
+}
+
+static void copy_projected_body_quad(
+    uint8_t face_offset,
+    DrawPolygon *polygon
+) {
+    const uint8_t *offset = box_face_screen_byte_offset[face_offset];
+    const uint8_t *source = (const uint8_t *)screen_vertices;
+
+    memcpy(&polygon->point[0], source + offset[0], sizeof(ScreenPoint));
+    memcpy(&polygon->point[1], source + offset[1], sizeof(ScreenPoint));
+    memcpy(&polygon->point[2], source + offset[2], sizeof(ScreenPoint));
+    memcpy(&polygon->point[3], source + offset[3], sizeof(ScreenPoint));
 }
 
 static void render_body_flat_lod(
@@ -2723,6 +2995,9 @@ static void render_body(
     uint8_t visible_count = 0;
     uint8_t visible_index;
     uint8_t visible_vertex_mask = 0;
+    uint8_t fully_projectable = (uint8_t)(
+        center.depth - projected_extent->depth >= NEAR_PLANE
+    );
 
     if ((layer->lod_shift != 0 || center.depth >= flat_lod_depth) &&
         body_fast_projected_bounds(
@@ -2763,17 +3038,19 @@ static void render_body(
     transform_body_vertices(body, center, world_axis);
     RENDER_BENCHMARK_COUNT(transformed_vertices, 8u);
     project_cached_box_vertices(visible_vertex_mask);
-    if (body_projected_bounds(
-            visible_vertex_mask,
-            &first_column,
-            &last_column,
-            &first_row,
-            &last_row
-        ) &&
-        (last_column < layer->bound_left ||
-         first_column > layer->bound_right ||
-         last_row < layer->first_row || first_row > layer->last_row)) {
-        return;
+    if (layer != &render_layers[0]) {
+        if (body_projected_bounds(
+                visible_vertex_mask,
+                &first_column,
+                &last_column,
+                &first_row,
+                &last_row
+            ) &&
+            (last_column < layer->bound_left ||
+             first_column > layer->bound_right ||
+             last_row < layer->first_row || first_row > layer->last_row)) {
+            return;
+        }
     }
     for (visible_index = 0; visible_index < visible_count; ++visible_index) {
         uint8_t face_offset = visible_face[visible_index];
@@ -2781,12 +3058,17 @@ static void render_body(
         uint8_t index;
         uint8_t inside_count = 0;
 
-        for (index = 0; index < 4u; ++index) {
-            uint8_t vertex = box_face_vertices[face_offset][index];
+        if (fully_projectable) {
+            copy_projected_body_quad(face_offset, polygon);
+            inside_count = 4u;
+        } else {
+            for (index = 0; index < 4u; ++index) {
+                uint8_t vertex = box_face_vertices[face_offset][index];
 
-            if (vertex_projectable[vertex]) {
-                polygon->point[index] = screen_vertices[vertex];
-                ++inside_count;
+                if (vertex_projectable[vertex]) {
+                    polygon->point[index] = screen_vertices[vertex];
+                    ++inside_count;
+                }
             }
         }
         if (inside_count == 0) continue;
@@ -2796,7 +3078,11 @@ static void render_body(
             continue;
         }
         polygon->top_vertex = 0;
-        if (!polygon_intersects_layer(polygon, layer)) continue;
+        if (inside_count == 4u) {
+            if (!body_quad_intersects_layer(polygon, layer)) continue;
+        } else if (!polygon_intersects_layer(polygon, layer)) {
+            continue;
+        }
         polygon->color = (uint8_t)(
             SHADED_PALETTE_FIRST + (body->color << 2)
         );
@@ -2871,6 +3157,12 @@ static void render_bodies(const Camera *camera, RenderLayer *layer) {
                 fixed_absolute(cached_world_axis[1].depth) +
                 fixed_absolute(cached_world_axis[2].depth);
         }
+        if (!body_camera_bounds_visible(
+                body_center[order[index]],
+                &cached_projected_extent
+            )) {
+            continue;
+        }
         render_body(
             body,
             camera,
@@ -2890,13 +3182,61 @@ static void render_room_faces_immediate(
     uint8_t lod
 ) {
     const Room *room = &rooms[camera->room];
+    uint8_t face_mask = 0x3Fu;
     uint8_t offset;
 
-    prepare_room_geometry(layer, camera);
+    if (!prepare_room_geometry(layer, camera, 0)) {
+        layer->count = 0;
+        layer->solid_count = 0;
+        return;
+    }
+    if (lod != 0u && layer->lod_shift == 2u) {
+        fixed_t horizontal_x = fixed_absolute(camera->forward.x);
+        fixed_t horizontal_y = fixed_absolute(camera->forward.y);
+        uint8_t forward_face;
+        uint8_t row;
+
+        if (horizontal_x > horizontal_y) {
+            forward_face = camera->forward.x > 0 ? 5u : 4u;
+        } else {
+            forward_face = camera->forward.y > 0 ? 3u : 2u;
+        }
+        /* At 20x15, establish floor/ceiling depth bands directly and reserve
+         * polygon setup for the dominant forward wall. This retains the three
+         * principal depth cues without paying twelve mostly subpixel edges. */
+        for (row = 2u; row < active_render_height; row += 4u) {
+            uint8_t left;
+            uint8_t right;
+            uint8_t target_first;
+            uint8_t target_last;
+            uint8_t color;
+
+            if (row < layer->first_row || row > layer->last_row) continue;
+            left = layer->row_left[row];
+            right = layer->row_right[row];
+            if (left > right || right < 2u) continue;
+            target_first = left <= 2u ? 0u : (uint8_t)((left + 1u) >> 2);
+            target_last = (uint8_t)((right - 2u) >> 2);
+            color = row < layer->horizon_row ?
+                (uint8_t)(world_faces[room->first_face + 1u].color + 2u) :
+                (uint8_t)(world_faces[room->first_face].color + 2u);
+            if (target_first <= target_last) {
+                memset(
+                    &portal_lod_frame[
+                        (uint16_t)(row >> 2) * PORTAL_LOD_STRIDE + target_first
+                    ],
+                    color,
+                    (size_t)(target_last - target_first + 1u)
+                );
+            }
+        }
+        face_mask = (uint8_t)(1u << forward_face);
+    }
     for (offset = 0; offset < ROOM_FACE_COUNT; ++offset) {
         uint8_t face_index = room->first_face + offset;
         DrawPolygon *polygon = &layer->polygon[0];
 
+        if ((face_mask & (1u << offset)) == 0u) continue;
         if (face_index == skipped_face) continue;
         if (!prepare_face_polygon(layer, face_index, offset, polygon)) continue;
         if (lod != 0) {
@@ -2926,7 +3266,8 @@ static void render_portal_lod(
 static void render_camera(
     const Camera *camera,
     uint8_t depth,
-    uint8_t skipped_face
+    uint8_t skipped_face,
+    uint8_t allow_room_cull
 );
 
 /* When a nearby portal covers every root pixel, none of the source room's
@@ -2982,7 +3323,7 @@ static uint8_t render_fullscreen_portal(const Camera *camera) {
         );
         RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_GEOMETRY);
         if (child->lod_shift == 0) {
-            render_camera(&destination, 1u, destination_face);
+            render_camera(&destination, 1u, destination_face, 0);
         } else {
             render_portal_lod(&destination, child, destination_face);
         }
@@ -2995,11 +3336,13 @@ static uint8_t render_fullscreen_portal(const Camera *camera) {
 static void render_camera(
     const Camera *camera,
     uint8_t depth,
-    uint8_t skipped_face
+    uint8_t skipped_face,
+    uint8_t allow_room_cull
 ) {
     RenderLayer *layer = &render_layers[depth];
     const Room *room = &rooms[camera->room];
     uint8_t face_visible[ROOM_FACE_COUNT] = {0, 0, 0, 0, 0, 0};
+    uint8_t exterior_face_mask;
     uint8_t index;
 
     if (depth != 0) {
@@ -3015,11 +3358,13 @@ static void render_camera(
     RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_ROOT_GEOMETRY);
     layer->count = 0;
     layer->solid_count = 0;
-    prepare_room_geometry(layer, camera);
+    if (!prepare_room_geometry(layer, camera, allow_room_cull)) return;
+    exterior_face_mask = room_exterior_face_mask(camera, room, allow_room_cull);
     for (index = 0; index < ROOM_FACE_COUNT; ++index) {
         uint8_t face_index = room->first_face + index;
         DrawPolygon *polygon = &layer->polygon[0];
 
+        if ((exterior_face_mask & (1u << index)) == 0) continue;
         if (face_index == skipped_face) continue;
         if (!prepare_face_polygon(layer, face_index, index, polygon)) continue;
         face_visible[index] = 1;
@@ -3054,7 +3399,7 @@ static void render_camera(
             destination = transform_portal_camera(polygon->portal, camera);
             destination_face = portals[portals[polygon->portal].linked].host_face;
             if (child->lod_shift == 0) {
-                render_camera(&destination, depth + 1, destination_face);
+                render_camera(&destination, depth + 1, destination_face, 0);
             } else {
                 render_portal_lod(&destination, child, destination_face);
             }
@@ -4303,6 +4648,13 @@ uint8_t engine_update(
         state->velocity.y = 0;
         state->velocity.z = 0;
         state->grounded = 0;
+#if RENDER_WIDTH < 160
+        /* A stationary transition can move from a culled black frame back to
+         * room geometry with only one swap. Force both physical buffers to
+         * accept that complete logical frame once. */
+        present_frame_cache_valid[0] = 0;
+        present_frame_cache_valid[1] = 0;
+#endif
     }
     if ((pressed & ENGINE_BUTTON_RESOLUTION) != 0) {
         state->render_shift ^= 1u;
@@ -4637,7 +4989,12 @@ void engine_render(const EngineState *state, uint16_t fps_tenths) {
         render_layers[0].row_right[row] = active_render_width - 1;
     }
     if (!render_fullscreen_portal(&camera)) {
-        render_camera(&camera, 0, NO_PORTAL);
+        render_camera(
+            &camera,
+            0,
+            NO_PORTAL,
+            (uint8_t)(state->dev_mode && state->noclip)
+        );
     }
     RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_WAIT);
     gfx_Wait();

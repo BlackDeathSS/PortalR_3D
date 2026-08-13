@@ -22,7 +22,7 @@
 #endif
 
 /* Stable YYMMDD/revision ID written into every benchmark result. */
-#define TRUE3D_BUILD_VERSION 0x26081202UL
+#define TRUE3D_BUILD_VERSION 0x26081304UL
 
 #ifndef TRUE3D_RENDER_BENCHMARK
 #define TRUE3D_RENDER_BENCHMARK 0

@@ -16,7 +16,7 @@
  *   ix+24  horizon shaded flag
  */
 _raster_fill_segment_80:
-	ld	hl, -12
+	ld	hl, -21
 	call	__frameset
 	ld	a, (ix + 15)
 	ld	(ix - 1), a
@@ -24,6 +24,37 @@ _raster_fill_segment_80:
 	ld	(ix - 2), a
 	ld	a, (ix + 21)
 	ld	(ix - 3), a
+
+	/* Cache the aperture cursors and first logical row address.  The previous
+	 * loop rebuilt each from RenderLayer + row on every scanline. */
+	ld	hl, (ix + 12)
+	ld	de, 1456
+	add	hl, de
+	ld	de, 0
+	ld	a, (ix - 1)
+	ld	e, a
+	add	hl, de
+	ld	(ix - 15), hl
+	ld	hl, (ix + 12)
+	ld	de, 1516
+	add	hl, de
+	ld	de, 0
+	ld	a, (ix - 1)
+	ld	e, a
+	add	hl, de
+	ld	(ix - 18), hl
+	ld	iy, _low_row_offsets
+	ld	de, 0
+	ld	a, (ix - 1)
+	add	a, a
+	ld	e, a
+	add	iy, de
+	ld	de, 0
+	ld	e, (iy)
+	ld	d, (iy + 1)
+	ld	hl, _low_frame+2
+	add	hl, de
+	ld	(ix - 21), hl
 
 .Lfill_row:
 	/* Sort the two signed Q8 intersections. Their clamped range makes the
@@ -111,26 +142,14 @@ _raster_fill_segment_80:
 	jp	c, .Lfill_advance
 
 	/* Intersect with the exact per-row portal/root aperture. */
-	ld	iy, (ix + 12)
-	ld	de, 1456
-	add	iy, de
-	ld	de, 0
-	ld	a, (ix - 1)
-	ld	e, a
-	add	iy, de
+	ld	iy, (ix - 15)
 	ld	a, (ix - 4)
 	cp	a, (iy)
 	jr	nc, .Lfill_left_clipped
 	ld	a, (iy)
 	ld	(ix - 4), a
 .Lfill_left_clipped:
-	ld	iy, (ix + 12)
-	ld	de, 1516
-	add	iy, de
-	ld	de, 0
-	ld	a, (ix - 1)
-	ld	e, a
-	add	iy, de
+	ld	iy, (ix - 18)
 	ld	a, (ix - 5)
 	cp	a, (iy)
 	jr	c, .Lfill_right_clipped
@@ -163,17 +182,7 @@ _raster_fill_segment_80:
 
 	/* Resolve the logical row address and fill inclusively. LDIR starts at
 	 * the second pixel, so a one-pixel span does not enter it. */
-	ld	iy, _low_row_offsets
-	ld	de, 0
-	ld	a, (ix - 1)
-	add	a, a
-	ld	e, a
-	add	iy, de
-	ld	de, 0
-	ld	e, (iy)
-	ld	d, (iy + 1)
-	ld	iy, _low_frame+2
-	add	iy, de
+	ld	iy, (ix - 21)
 	ld	de, 0
 	ld	a, (ix - 4)
 	ld	e, a
@@ -211,6 +220,18 @@ _raster_fill_segment_80:
 	ld	(iy + 4), hl
 
 .Lfill_next_row:
+	ld	hl, (ix - 15)
+	inc	hl
+	ld	(ix - 15), hl
+	ld	hl, (ix - 18)
+	inc	hl
+	ld	(ix - 18), hl
+	ld	hl, (ix - 21)
+	ld	de, 0
+	ld	a, (_active_render_width)
+	ld	e, a
+	add	hl, de
+	ld	(ix - 21), hl
 	ld	a, (ix - 1)
 	inc	a
 	ld	(ix - 1), a
