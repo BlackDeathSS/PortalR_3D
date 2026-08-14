@@ -1,0 +1,32 @@
+{
+  "rom": "C:/Users/refiorlk_admin/Documents/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/bin/PORTAL3D.8xp"
+  ],
+  "target": {"name": "PORTAL3D", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|500",
+    "key|2nd",
+    "delay|300",
+    "hold|right",
+    "delay|450",
+    "release|right",
+    "key|alpha",
+    "delay|300",
+    "hold|left",
+    "delay|225",
+    "release|left",
+    "delay|1000",
+    "hash|buffer0",
+    "hash|buffer1",
+    "hash|palette"
+  ],
+  "hashes": {
+    "buffer0": {"description": "GraphX buffer zero", "start": "0xD40000", "size": 76800, "expected_CRCs": ["00000000"]},
+    "buffer1": {"description": "GraphX buffer one", "start": "0xD52C00", "size": 76800, "expected_CRCs": ["00000000"]},
+    "palette": {"description": "LCD palette", "start": "0xE30200", "size": 512, "expected_CRCs": ["00000000"]}
+  }
+}

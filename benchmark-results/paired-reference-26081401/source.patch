@@ -1,0 +1,574 @@
+Exit code: 0
+Wall time: 0.5 seconds
+Output:
+diff --git a/src/game.c b/src/game.c
+index 5f03dfc..7bdf527 100644
+--- a/src/game.c
++++ b/src/game.c
+@@ -66,18 +66,15 @@
+ #define FLOOR_NEAR_DISTANCE (FIXED_ONE + 4)
+ #define FLOOR_FAR_DISTANCE (FIXED_ONE * 16)
+ #define FLOOR_PROJECT_LIMIT 4096
+-#define WALL_HEIGHT_TABLE_SHIFT 2
+-#define WALL_HEIGHT_TABLE_SIZE 2048
+-#define WALL_DISTANCE_TABLE_SIZE \
+-    (WALL_HEIGHT_TABLE_SIZE << WALL_HEIGHT_TABLE_SHIFT)
++#define WALL_HEIGHT_TABLE_SHIFT 4
++#define WALL_HEIGHT_TABLE_SIZE 512
++#define WALL_DISTANCE_TABLE_SIZE WALL_HEIGHT_TABLE_SIZE
+ #define WALL_HEIGHT_NUMERATOR \
+     ((GFX_LCD_HEIGHT * FIXED_ONE) >> WALL_HEIGHT_TABLE_SHIFT)
+ #define FLOOR_NEAR_HEIGHT \
+-    (WALL_HEIGHT_NUMERATOR / \
+-        (FLOOR_NEAR_DISTANCE >> WALL_HEIGHT_TABLE_SHIFT))
++    ((GFX_LCD_HEIGHT * FIXED_ONE) / FLOOR_NEAR_DISTANCE)
+ #define FLOOR_FAR_HEIGHT \
+-    (WALL_HEIGHT_NUMERATOR / \
+-        (FLOOR_FAR_DISTANCE >> WALL_HEIGHT_TABLE_SHIFT))
++    ((GFX_LCD_HEIGHT * FIXED_ONE) / FLOOR_FAR_DISTANCE)
+ #define FLOOR_NEAR_SCREEN_Y (GFX_LCD_HEIGHT / 2 + FLOOR_NEAR_HEIGHT / 2)
+ #define FLOOR_FAR_SCREEN_Y (GFX_LCD_HEIGHT / 2 + FLOOR_FAR_HEIGHT / 2)
+ #define WALL_HEIGHT_FAR 7
+@@ -85,6 +82,7 @@
+ #define MAX_RENDER_PORTAL_DEPTH GAME_RENDER_MAX_PORTAL_DEPTH
+ #define MAX_PORTAL_TRACE_DEPTH 12
+ #define PORTAL_RECURSE_MIN_HEIGHT 3
++#define GRID_LINE_LOD_STRIDE 2u
+ #define GRID_SEGMENT_CAPACITY ((MAP_WIDTH + 1) + (MAP_HEIGHT + 1))
+ #define PLAYER_RADIUS 44
+ #define FIELD_OF_VIEW 169
+@@ -1755,7 +1753,7 @@ static void place_portal(GameState *game, uint8_t primary) {
+ 
+ static inline __attribute__((always_inline)) const WallContext *
+ wall_context_for_distance(fixed_t distance) {
+-    uint24_t table_index = (uint24_t)distance;
++    uint24_t table_index = (uint24_t)distance >> WALL_HEIGHT_TABLE_SHIFT;
+ 
+     if (table_index >= WALL_DISTANCE_TABLE_SIZE) {
+         table_index = WALL_DISTANCE_TABLE_SIZE - 1u;
+@@ -2160,7 +2158,7 @@ static void draw_background_grid(
+ 
+     /* Project each world-space line once; ceiling lines mirror the floor. */
+     for (line = 0; line <= MAP_WIDTH; ++line) {
+-        if (direction_y_value == 0) {
++        if ((line % GRID_LINE_LOD_STRIDE) == 0 && direction_y_value == 0) {
+             fixed_t distance = x_line_near;
+ 
+             if (distance >= FLOOR_NEAR_DISTANCE && distance <= FLOOR_FAR_DISTANCE) {
+@@ -2173,7 +2171,7 @@ static void draw_background_grid(
+                     );
+                 }
+             }
+-        } else {
++        } else if ((line % GRID_LINE_LOD_STRIDE) == 0) {
+             fixed_t lateral_near = x_line_near;
+             fixed_t lateral_far = x_line_far;
+ 
+@@ -2217,7 +2215,7 @@ static void draw_background_grid(
+     }
+ 
+     for (line = 0; line <= MAP_HEIGHT; ++line) {
+-        if (direction_x_value == 0) {
++        if ((line % GRID_LINE_LOD_STRIDE) == 0 && direction_x_value == 0) {
+             fixed_t distance = y_line_near;
+ 
+             if (distance >= FLOOR_NEAR_DISTANCE && distance <= FLOOR_FAR_DISTANCE) {
+@@ -2230,7 +2228,7 @@ static void draw_background_grid(
+                     );
+                 }
+             }
+-        } else {
++        } else if ((line % GRID_LINE_LOD_STRIDE) == 0) {
+             fixed_t lateral_near = y_line_near;
+             fixed_t lateral_far = y_line_far;
+ 
+@@ -2972,12 +2970,7 @@ void game_graphics_init(void) {
+         }
+         {
+             uint8_t profile_index = (uint8_t)(profile_count - 1u);
+-            uint24_t distance_index = index << WALL_HEIGHT_TABLE_SHIFT;
+-
+-            render_wall_scale_profile_index[distance_index] = profile_index;
+-            render_wall_scale_profile_index[distance_index + 1u] = profile_index;
+-            render_wall_scale_profile_index[distance_index + 2u] = profile_index;
+-            render_wall_scale_profile_index[distance_index + 3u] = profile_index;
++            render_wall_scale_profile_index[index] = profile_index;
+         }
+     }
+ 
+@@ -3311,13 +3304,15 @@ void game_render(const GameState *game) {
+     mark = now;
+ #endif
+ 
+-    for (column = 0; column < LOGICAL_COLUMNS; ++column) {
+-        render_column(
+-            game,
+-            column * COLUMN_WIDTH,
+-            ray_x.value,
+-            ray_y.value
+-        );
++    /* Sample each two-column packet at its center ray. */
++    ray_stepper_advance(&ray_x);
++    ray_stepper_advance(&ray_y);
++    for (column = 0; column < LOGICAL_COLUMNS; column += 2u) {
++        uint24_t screen_x = column * COLUMN_WIDTH;
++
++        render_column(game, screen_x, ray_x.value, ray_y.value);
++        ray_stepper_advance(&ray_x);
++        ray_stepper_advance(&ray_y);
+         ray_stepper_advance(&ray_x);
+         ray_stepper_advance(&ray_y);
+     }
+diff --git a/src/game.h b/src/game.h
+index a958dcc..7b14cc9 100644
+--- a/src/game.h
++++ b/src/game.h
+@@ -21,9 +21,9 @@
+ #define GAME_RENDER_COLUMN_WIDTH 4
+ #define GAME_RENDER_TEXTURE_WIDTH 16
+ #define GAME_RENDER_TEXTURE_HEIGHT 8
+-#define GAME_RENDER_MAX_PORTAL_DEPTH 6
++#define GAME_RENDER_MAX_PORTAL_DEPTH 4
+ /* Stable YYMMDD/revision ID shared by every benchmark program variant. */
+-#define GAME_BUILD_VERSION 0x26072904UL
++#define GAME_BUILD_VERSION 0x26081401UL
+ 
+ typedef int24_t fixed_t;
+ 
+diff --git a/src/render_asm.s b/src/render_asm.s
+index b7be077..c09af0f 100644
+--- a/src/render_asm.s
++++ b/src/render_asm.s
+@@ -2777,7 +2777,7 @@ _render_asm_draw_wall_segment:
+ 	 */
+ 	ld a, (_render_span_run_length)
+ 	cp a, 8
+-	jr c, .Lspan_write_short
++	jp c, .Lspan_write_short
+ 	ld c, a
+ 	add a, 7
+ 	srl a
+@@ -2803,34 +2803,50 @@ _render_asm_draw_wall_segment:
+ .Lspan_write_8:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lspan_write_7:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lspan_write_6:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lspan_write_5:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lspan_write_4:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lspan_write_3:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lspan_write_2:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lspan_write_1:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	djnz .Lspan_write_8
+ 	jr .Lspan_write_done
+@@ -2842,19 +2858,27 @@ _render_asm_draw_wall_segment:
+ 	jr nc, .Lspan_write_short_pairs
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lspan_write_short_pairs:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	djnz .Lspan_write_short_pairs
+ 	jr .Lspan_write_done
+ .Lspan_write_short_single:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lspan_write_done:
+ 	/* Advance past any collapsed source rows before drawing the next run. */
+@@ -3052,7 +3076,7 @@ _render_asm_draw_wall_segment_registers:
+ 	ld de, 320
+ 	/* Same exact four-pixel Duff writer as the general kernel. */
+ 	cp a, 8
+-	jr c, .Lfast_span_write_short
++	jp c, .Lfast_span_write_short
+ 	ld c, a
+ 	add a, 7
+ 	srl a
+@@ -3078,34 +3102,50 @@ _render_asm_draw_wall_segment_registers:
+ .Lfast_span_write_8:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lfast_span_write_7:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lfast_span_write_6:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lfast_span_write_5:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lfast_span_write_4:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lfast_span_write_3:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lfast_span_write_2:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lfast_span_write_1:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	djnz .Lfast_span_write_8
+ 	jr .Lfast_span_write_done
+@@ -3117,19 +3157,27 @@ _render_asm_draw_wall_segment_registers:
+ 	jr nc, .Lfast_span_write_short_pairs
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lfast_span_write_short_pairs:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	djnz .Lfast_span_write_short_pairs
+ 	jr .Lfast_span_write_done
+ .Lfast_span_write_short_single:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lfast_span_write_done:
+ 	pop bc
+@@ -3291,7 +3339,7 @@ _render_asm_draw_wall_segment_prepacked:
+ 	push bc
+ 	ld de, 320
+ 	cp a, 8
+-	jr c, .Lpacked_span_write_short
++	jp c, .Lpacked_span_write_short
+ 	ld c, a
+ 	add a, 7
+ 	srl a
+@@ -3317,34 +3365,50 @@ _render_asm_draw_wall_segment_prepacked:
+ .Lpacked_span_write_8:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lpacked_span_write_7:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lpacked_span_write_6:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lpacked_span_write_5:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lpacked_span_write_4:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lpacked_span_write_3:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lpacked_span_write_2:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lpacked_span_write_1:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	djnz .Lpacked_span_write_8
+ 	jr .Lpacked_span_write_done
+@@ -3356,19 +3420,27 @@ _render_asm_draw_wall_segment_prepacked:
+ 	jr nc, .Lpacked_span_write_short_pairs
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lpacked_span_write_short_pairs:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	djnz .Lpacked_span_write_short_pairs
+ 	jr .Lpacked_span_write_done
+ .Lpacked_span_write_short_single:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lpacked_span_write_done:
+ 	pop bc
+@@ -3399,8 +3471,8 @@ _render_asm_draw_solid_segment:
+ 	ld b, a
+ 	ld a, (ix + 12)
+ 	cp a, b
+-	jr c, .Lsolid_return
+-	jr z, .Lsolid_return
++	jp c, .Lsolid_return
++	jp z, .Lsolid_return
+ 	sub a, b
+ 	ld c, a
+ 
+@@ -3428,6 +3500,10 @@ _render_asm_draw_solid_segment:
+ 	ld (iy + 1), a
+ 	ld (iy + 2), a
+ 	ld (iy + 3), a
++	ld (iy + 4), a
++	ld (iy + 5), a
++	ld (iy + 6), a
++	ld (iy + 7), a
+ 	add iy, de
+ 
+ .Lsolid_pairs_ready:
+@@ -3436,11 +3512,19 @@ _render_asm_draw_solid_segment:
+ 	ld (iy + 1), a
+ 	ld (iy + 2), a
+ 	ld (iy + 3), a
++	ld (iy + 4), a
++	ld (iy + 5), a
++	ld (iy + 6), a
++	ld (iy + 7), a
+ 	add iy, de
+ 	ld (iy), a
+ 	ld (iy + 1), a
+ 	ld (iy + 2), a
+ 	ld (iy + 3), a
++	ld (iy + 4), a
++	ld (iy + 5), a
++	ld (iy + 6), a
++	ld (iy + 7), a
+ 	add iy, de
+ 	djnz .Lsolid_pair_loop
+ 	jr .Lsolid_return
+@@ -3449,6 +3533,10 @@ _render_asm_draw_solid_segment:
+ 	ld (iy + 1), a
+ 	ld (iy + 2), a
+ 	ld (iy + 3), a
++	ld (iy + 4), a
++	ld (iy + 5), a
++	ld (iy + 6), a
++	ld (iy + 7), a
+ 	add iy, de
+ .Lsolid_return:
+ 	pop ix
+@@ -3753,7 +3841,7 @@ _render_asm_draw_portal_mask:
+ 	ld de, 320
+ 	ld a, (_render_span_run_length)
+ 	cp a, 8
+-	jr c, .Lportal_mask_write_short
++	jp c, .Lportal_mask_write_short
+ 	ld c, a
+ 	add a, 7
+ 	srl a
+@@ -3779,34 +3867,50 @@ _render_asm_draw_portal_mask:
+ .Lportal_mask_write_8:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lportal_mask_write_7:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lportal_mask_write_6:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lportal_mask_write_5:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lportal_mask_write_4:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lportal_mask_write_3:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lportal_mask_write_2:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lportal_mask_write_1:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	djnz .Lportal_mask_write_8
+ 	jr .Lportal_mask_write_done
+@@ -3818,19 +3922,27 @@ _render_asm_draw_portal_mask:
+ 	jr nc, .Lportal_mask_write_short_pairs
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lportal_mask_write_short_pairs:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ 	djnz .Lportal_mask_write_short_pairs
+ 	jr .Lportal_mask_write_done
+ .Lportal_mask_write_short_single:
+ 	ld (iy), hl
+ 	ld (iy + 3), l
++	ld (iy + 4), hl
++	ld (iy + 7), l
+ 	add iy, de
+ .Lportal_mask_write_done:
+ 	ld a, (_render_span_next_y)
+@@ -3904,6 +4016,10 @@ _render_asm_draw_portal_mask:
+ 	ld (iy + 1), a
+ 	ld (iy + 2), a
+ 	ld (iy + 3), a
++	ld (iy + 4), a
++	ld (iy + 5), a
++	ld (iy + 6), a
++	ld (iy + 7), a
+ 	dec c
+ 	ret z
+ 	ld de, 320
+@@ -3912,10 +4028,15 @@ _render_asm_draw_portal_mask:
+ 	ld (iy + 1), a
+ 	ld (iy + 2), a
+ 	ld (iy + 3), a
++	ld (iy + 4), a
++	ld (iy + 5), a
++	ld (iy + 6), a
++	ld (iy + 7), a
+ 	ret
+ 
+ 	.size _render_asm_draw_portal_mask, .-_render_asm_draw_portal_mask
+ 
++
+ 	.section .bss.render_asm_scratch,"aw",@nobits
+ 	.global _render_ray_state
+ 	.type _render_ray_state, @object
+

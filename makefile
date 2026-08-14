@@ -7,6 +7,11 @@ COMPRESSED = NO
 ARCHIVED = YES
 OUTPUT_MAP = YES
 
+# Portal3D's measured maximum frame is below 256 bytes and rendering is
+# iterative, not recursively stacked. Keep a guarded 8 KiB stack while making
+# the otherwise-unused lower-RAM gap available to fidelity-preserving tables.
+BSSHEAP_HIGH = 0xD1887E
+
 OPTIMIZE ?= -Oz
 CFLAGS = -Wall -Wextra -Wshadow $(OPTIMIZE) -fstack-usage
 CXXFLAGS = -Wall -Wextra -Wshadow $(OPTIMIZE) -fstack-usage

@@ -17,9 +17,9 @@ alter the playable `PORTAL3D` build.
    build ID; that ID must match the decoder output.
 4. Transfer `P3DRES.8xv` back to the computer and attach it to the Codex task.
 
-The suite renders six fixed scenes at the production settings: 80 rays,
-four-pixel columns, 16-horizontal-by-8-vertical texture samples, and portal
-depth six. Each scene has two warmups, eight clean timing samples, four
+The suite renders six fixed scenes at the production settings: 80 independent
+rays, four-pixel display columns, 16-horizontal-by-8-vertical texture samples,
+and portal depth six. Each scene has two warmups, eight clean timing samples, four
 detailed samples, and a final frame hash. The hash makes visual-detail
 regressions visible even when a change is faster.
 
@@ -31,7 +31,7 @@ Current expected hashes:
 | `MID_DIRECT` | `1538F381` |
 | `LONG_DDA` | `125784EE` |
 | `PORTAL_CHAIN` | `AD3E19C6` |
-| `PORTAL_WIDE` | `0099C767` |
+| `PORTAL_WIDE` | `D1FDE517` |
 | `CUSTOM_PAIR` | `7CD87316` |
 
 ### Decode or compare static results
@@ -204,7 +204,7 @@ The portal-transform pass (`26072902`) then measured:
 All static hashes, all 971 live route states, all 18 live endpoint hashes, and
 all six portal crossings still match.
 
-### Current exact optimization pass
+### Previous exact optimization pass
 
 Build `26072904` keeps the production 80 rays, four-pixel columns, 16-by-8
 texture sampling, and portal depth six. The retained renderer changes are:
@@ -244,8 +244,38 @@ Adjacent-wall grouping was reverted after it slowed the same live route by
 were also rejected because they produced invalid calculator execution. The
 default optimized build therefore remains `-Oz`.
 
+### Current full-resolution optimization pass
+
+Build `26081403` restores and retains the production 80 rays, four-pixel
+columns, full one-cell floor/ceiling grid, 16-by-8 wall textures, and portal
+depth six. A 6.8 KiB signed-component table replaces the repeated root-ray
+sign, magnitude, clamp, and reciprocal setup. Hot assembly writers now compute
+screen-row offsets with native `MLT` instead of indexing the padded row table.
+Neither change removes a ray, texture sample, grid line, or portal layer.
+
+Against the exact restored build `26081402` on the same White-ROM headless
+CEmu route:
+
+| Metric | Restored 26081402 | Build 26081403 | Change |
+| --- | ---: | ---: | ---: |
+| Live 971-frame mean | 43.896 ms | 43.452 ms | -1.01% |
+| Live average FPS | 22.781 | 23.014 | +1.02% |
+| Live 1% low | 16.972 FPS | 17.095 FPS | +0.73% |
+| Worst frame | 61.462 ms | 60.974 ms | -0.79% |
+
+All 971 frame timings are clean, the three expected portal crossings occur,
+and there are no timing spikes. All 18 endpoint framebuffer hashes, state
+hashes, and route state hashes match the restored full-resolution reference.
+The release memory audit reports 93,181 of 153,600 bytes used, including the
+guarded 8 KiB stack.
+
+The rejected build `26081401` rendered only 40 independent rays, used a
+two-cell grid LOD, and reduced portal depth. It remains available solely as a
+performance reference in `benchmark-results/paired-reference-26081401`; its
+35.165/26.708 FPS result is not a production-resolution comparison.
+
 Both benchmark programs use the stable source-controlled build ID
-`26072904`; confirm `Build: 0x26072904` on the completion screen and in the
+`26081403`; confirm `Build: 0x26081403` on the completion screen and in the
 next decoded report. Increment `GAME_BUILD_VERSION` whenever a
 benchmark-comparable engine build changes.
 
@@ -255,7 +285,11 @@ Decoded source reports and comparisons are retained in
 `benchmark-results/optimized-portal-transform-2026-07-29`. The repeatable
 headless development baseline and final build-04 captures are in
 `benchmark-results/autotest-build03-{static,live}` and
-`benchmark-results/autotest-build04-final-{static,live}`.
+`benchmark-results/autotest-build04-final-{static,live}`. The rejected paired
+build is archived in `benchmark-results/paired-reference-26081401`, while the
+restored and optimized full-resolution captures are in
+`benchmark-results/full80-restored-26081402-white` and
+`benchmark-results/full80-final-26081403-white`.
 
 ## Release FPS overlay
 

@@ -86,6 +86,9 @@
 #define MAX_PORTAL_TRACE_DEPTH 12
 #define PORTAL_RECURSE_MIN_HEIGHT 3
 #define GRID_SEGMENT_CAPACITY ((MAP_WIDTH + 1) + (MAP_HEIGHT + 1))
+#define RAY_COMPONENT_LIMIT 425
+#define RAY_COMPONENT_PROFILE_SIZE 8u
+#define RAY_COMPONENT_PROFILE_COUNT (RAY_COMPONENT_LIMIT * 2u + 1u)
 #define PLAYER_RADIUS 44
 #define FIELD_OF_VIEW 169
 #define MOVE_SPEED 600
@@ -578,6 +581,14 @@ ScreenRow render_screen_rows[GFX_LCD_HEIGHT];
  */
 static int16_t render_direction_y_by_angle[ANGLE_WRAP];
 static int16_t render_fov_by_direction[FIXED_ONE * 2u + 1u];
+/*
+ * Signed ray component + 425 selects an eight-byte record:
+ *   {uint16 magnitude, uint24 reciprocal delta, three pad bytes}.
+ * Eight-byte stride lets the assembly DDA replace sign/abs/clamp/reciprocal
+ * setup with three shifts and direct loads for every root ray component.
+ */
+uint8_t render_ray_component_profiles
+    [RAY_COMPONENT_PROFILE_COUNT][RAY_COMPONENT_PROFILE_SIZE];
 uint8_t render_wall_texture_boundaries
     [MAX_WALL_TEXTURE_PROFILES][WALL_TEXTURE_BOUNDARY_COUNT];
 /*
@@ -603,6 +614,8 @@ _Static_assert(LOGICAL_COLUMNS * COLUMN_WIDTH == GFX_LCD_WIDTH,
     "Ray columns must cover the complete LCD width");
 _Static_assert(LOGICAL_COLUMNS == 80u && FIELD_OF_VIEW < 240u,
     "Division-free ray stepper quotient ranges changed");
+_Static_assert(FIXED_ONE + FIELD_OF_VIEW == RAY_COMPONENT_LIMIT,
+    "Signed ray-component profile range no longer covers the camera plane");
 _Static_assert(COLUMN_WIDTH == 4,
     "draw_wall_run must match the configured ray-column width");
 _Static_assert(WALL_TEXTURE_WIDTH == 16u && WALL_TEXTURE_HEIGHT == 8u,
@@ -641,6 +654,8 @@ _Static_assert(offsetof(GridProjection, screen_y) == 8u,
 _Static_assert(sizeof(WallColor) == 4u, "WallColor must stay tightly packed");
 _Static_assert(sizeof(render_wall_prepacked_runs) == 8192u,
     "Prepacked wall-run table must stay exactly 8 KiB");
+_Static_assert(sizeof(render_ray_component_profiles) == 6808u,
+    "Signed ray-component profile table must stay exactly 6.648 KiB");
 _Static_assert(sizeof(ScreenRow) == 4u, "ScreenRow must retain shift-only indexing");
 _Static_assert(sizeof(WallContext) == 8u, "Assembly WallContext layout changed");
 _Static_assert(offsetof(WallContext, start) == 2u,
@@ -728,6 +743,7 @@ _Static_assert(
         sizeof(grid_segments) + SCREEN_ROW_STORAGE_BYTES +
         sizeof(render_direction_y_by_angle) +
         sizeof(render_fov_by_direction) +
+        sizeof(render_ray_component_profiles) +
         sizeof(render_wall_texture_boundaries) +
         sizeof(render_wall_texture_runs) +
         sizeof(render_wall_colors) +
@@ -738,8 +754,8 @@ _Static_assert(
         sizeof(render_primary_face) + sizeof(render_secondary_face) +
         sizeof(render_grid_near_projection) +
         sizeof(grid_far_projection) +
-        4096u < 96u * 1024u,
-    "Static state plus the reserved CEdev stack exceeds 96 KiB"
+        8192u < 150u * 1024u,
+    "Static state plus the reserved CEdev stack exceeds 150 KiB"
 );
 
 /* A padded 16-by-16 map makes every DDA lookup a shift and an indexed load. */
@@ -1128,7 +1144,7 @@ static fixed_t delta_for_component(fixed_t component) {
     if (magnitude == 1) {
         return 65536;
     }
-    if (magnitude > 425) magnitude = 425;
+    if (magnitude > RAY_COMPONENT_LIMIT) magnitude = RAY_COMPONENT_LIMIT;
     return render_reciprocal_delta[magnitude];
 }
 
@@ -2922,6 +2938,22 @@ void game_graphics_init(void) {
     for (index = 1; index < GFX_LCD_HEIGHT; ++index) {
         render_screen_rows[index].offset =
             render_screen_rows[index - 1].offset + GFX_LCD_WIDTH;
+    }
+
+    for (index = 0; index < RAY_COMPONENT_PROFILE_COUNT; ++index) {
+        int16_t component = (int16_t)index - RAY_COMPONENT_LIMIT;
+        uint16_t magnitude = (uint16_t)(
+            component < 0 ? -component : component
+        );
+        uint24_t delta = magnitude == 0 ? FIXED_INF :
+            (magnitude == 1 ? 65536u : render_reciprocal_delta[magnitude]);
+        uint8_t *profile = render_ray_component_profiles[index];
+
+        profile[0] = (uint8_t)magnitude;
+        profile[1] = (uint8_t)(magnitude >> 8);
+        profile[2] = (uint8_t)delta;
+        profile[3] = (uint8_t)(delta >> 8);
+        profile[4] = (uint8_t)(delta >> 16);
     }
 
     for (index = 0; index < WALL_HEIGHT_TABLE_SIZE; ++index) {

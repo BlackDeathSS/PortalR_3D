@@ -81,6 +81,7 @@
 	.equ BACKGROUND_REPAIR_TOP_BYTES, 640
 	.equ BACKGROUND_REPAIR_BOTTOM_OFFSET, 40640
 	.equ BACKGROUND_REPAIR_BOTTOM_BYTES, 320
+	.equ RAY_COMPONENT_ZERO_OFFSET, 3400
 
 	.section .text._render_asm_cast_wall_begin,"ax",@progbits
 	.global _render_asm_cast_wall_begin
@@ -115,13 +116,11 @@ _render_asm_cast_wall_begin:
 	ld (_render_ray_state + STATE_ORIGIN_Y), hl
 	ld hl, (ix + 12)
 	ld (_render_ray_state + STATE_RAY_X), hl
-	ld a, (ix + 14)
 	ld iy, _render_ray_state + STATE_ABS_X
 	call .Lstate_component_init
 	ld (_render_ray_state + STATE_DELTA_X), hl
 	ld hl, (ix + 15)
 	ld (_render_ray_state + STATE_RAY_Y), hl
-	ld a, (ix + 17)
 	ld iy, _render_ray_state + STATE_ABS_Y
 	call .Lstate_component_init
 	ld (_render_ray_state + STATE_DELTA_Y), hl
@@ -722,58 +721,24 @@ _render_asm_cast_wall_continue:
 	ret
 
 /*
- * Initialize one persistent component. A is the sign byte, HL is signed,
- * and IY points at the state's packed uint16_t magnitude. Return the positive
- * reciprocal delta in HL.
+ * Initialize one persistent signed component through the eight-byte profile
+ * table built at graphics startup. HL is in the proven -425..425 camera-ray
+ * range and IY points at the state's packed uint16_t magnitude. Return the
+ * exact positive reciprocal delta in HL.
  */
 .Lstate_component_init:
-	bit 7, a
-	jr z, .Lstate_component_magnitude
-	ex de, hl
-	or a, a
-	sbc hl, hl
-	sbc hl, de
-
-.Lstate_component_magnitude:
-	ld (iy), l
-	ld (iy + 1), h
-	ld de, 0
-	or a, a
-	sbc hl, de
-	jr z, .Lstate_component_zero
-
-	dec hl
-	jr z, .Lstate_component_one
-	inc hl
-
-	ld de, 425
-	or a, a
-	sbc hl, de
-	jr c, .Lstate_component_under_limit
-	ld hl, 425
-	jr .Lstate_component_lookup
-
-.Lstate_component_under_limit:
-	add hl, de
-
-.Lstate_component_lookup:
 	add hl, hl
-	ld de, _render_reciprocal_delta
+	add hl, hl
+	add hl, hl
+	ld de, _render_ray_component_profiles + RAY_COMPONENT_ZERO_OFFSET
 	add hl, de
-	ld e, (hl)
+	ld a, (hl)
+	ld (iy), a
 	inc hl
-	ld d, (hl)
-	ld hl, 0
-	ld l, e
-	ld h, d
-	ret
-
-.Lstate_component_zero:
-	ld hl, FIXED_INF
-	ret
-
-.Lstate_component_one:
-	ld hl, 65536
+	ld a, (hl)
+	ld (iy + 1), a
+	inc hl
+	ld hl, (hl)
 	ret
 
 	.size _render_asm_cast_wall_begin, .-_render_asm_cast_wall_begin
@@ -1917,12 +1882,12 @@ _render_asm_draw_horizontal_grid_pair:
 	/* Resolve both row pointers before temporarily moving SP into VRAM. */
 	ld hl, 0
 	ld l, a
-	add hl, hl
-	add hl, hl
-	ld de, _render_screen_rows
-	add hl, de
-	ld de, (hl)
+	ld h, 160
+	mlt hl
+	push hl
+	pop de
 	ld hl, (0xE30014)
+	add hl, de
 	add hl, de
 	ld (_render_grid_floor_row), hl
 
@@ -1931,12 +1896,12 @@ _render_asm_draw_horizontal_grid_pair:
 	sub a, b
 	ld hl, 0
 	ld l, a
-	add hl, hl
-	add hl, hl
-	ld de, _render_screen_rows
-	add hl, de
-	ld de, (hl)
+	ld h, 160
+	mlt hl
+	push hl
+	pop de
 	ld hl, (0xE30014)
+	add hl, de
 	add hl, de
 	ld (_render_grid_ceiling_row), hl
 
@@ -2693,11 +2658,11 @@ _render_asm_draw_wall_segment:
 	add iy, de
 	ld hl, 0
 	ld l, (ix + 12)
-	add hl, hl
-	add hl, hl
-	ld de, _render_screen_rows
-	add hl, de
-	ld de, (hl)
+	ld h, 160
+	mlt hl
+	push hl
+	pop de
+	add iy, de
 	add iy, de
 
 	/* Find the first visible source row in the pre-scaled boundary profile. */
@@ -3003,11 +2968,11 @@ _render_asm_draw_wall_segment_registers:
 	add iy, de
 	ld hl, 0
 	ld l, (ix + 12)
-	add hl, hl
-	add hl, hl
-	ld de, _render_screen_rows
-	add hl, de
-	ld de, (hl)
+	ld h, 160
+	mlt hl
+	push hl
+	pop de
+	add iy, de
 	add iy, de
 
 	ld c, (ix + 12)
@@ -3249,11 +3214,11 @@ _render_asm_draw_wall_segment_prepacked:
 	add iy, de
 	ld hl, 0
 	ld l, (ix + 12)
-	add hl, hl
-	add hl, hl
-	ld de, _render_screen_rows
-	add hl, de
-	ld de, (hl)
+	ld h, 160
+	mlt hl
+	push hl
+	pop de
+	add iy, de
 	add iy, de
 
 	ld c, (ix + 12)
@@ -3410,11 +3375,11 @@ _render_asm_draw_solid_segment:
 	add iy, de
 	ld hl, 0
 	ld l, (ix + 9)
-	add hl, hl
-	add hl, hl
-	ld de, _render_screen_rows
-	add hl, de
-	ld de, (hl)
+	ld h, 160
+	mlt hl
+	push hl
+	pop de
+	add iy, de
 	add iy, de
 
 	ld a, (ix + 15)
@@ -3679,11 +3644,11 @@ _render_asm_draw_portal_mask:
 	add iy, de
 	ld hl, 0
 	ld l, b
-	add hl, hl
-	add hl, hl
-	ld de, _render_screen_rows
-	add hl, de
-	ld de, (hl)
+	ld h, 160
+	mlt hl
+	push hl
+	pop de
+	add iy, de
 	add iy, de
 
 	ld a, (_render_span_y)
@@ -3891,11 +3856,11 @@ _render_asm_draw_portal_mask:
 	add iy, de
 	ld hl, 0
 	ld l, b
-	add hl, hl
-	add hl, hl
-	ld de, _render_screen_rows
-	add hl, de
-	ld de, (hl)
+	ld h, 160
+	mlt hl
+	push hl
+	pop de
+	add iy, de
 	add iy, de
 
 	/* A portal ring is one or two rows; clipping cannot increase that span. */
@@ -4050,13 +4015,12 @@ _render_portal_bottom_start:
 	.extern _render_wall_texture_runs
 	.extern _render_wall_colors
 	.extern _render_wall_prepacked_runs
-	.extern _render_screen_rows
 	.extern _render_builtin_portal_by_tile
 	.extern _render_builtin_portals
 	.extern _render_portal_faces
 	.extern _render_portal_transform_plans
 	.extern _render_portal_profile_by_u
-	.extern _render_reciprocal_delta
+	.extern _render_ray_component_profiles
 	.extern _render_grid_near_projection
 	.extern _grid_far_projection
 	.extern _gfx_HorizLine_NoClip

@@ -23,7 +23,7 @@
 #define GAME_RENDER_TEXTURE_HEIGHT 8
 #define GAME_RENDER_MAX_PORTAL_DEPTH 6
 /* Stable YYMMDD/revision ID shared by every benchmark program variant. */
-#define GAME_BUILD_VERSION 0x26072904UL
+#define GAME_BUILD_VERSION 0x26081403UL
 
 typedef int24_t fixed_t;
 
