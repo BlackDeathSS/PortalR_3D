@@ -37,6 +37,14 @@ COUNTER_COUNT = 11
 EXPECTED_CROSSINGS = 4
 EXPECTED_CROSSING_FRAMES = (318, 324, 432, 764)
 ROUTE_STEP_COUNT = 21
+DUAL_PORTAL_PROFILE = 3
+DUAL_PORTAL_ROUTE_STEP_COUNT = 90
+BENCHMARK_PROFILE_NAMES = {
+    0: "no-body",
+    1: "root-four",
+    2: "portal-four",
+    3: "dual-portal-four",
+}
 REPORT_SIZE = (
     HEADER_SIZE
     + SECTION_COUNT * SECTION_RECORD_SIZE
@@ -172,6 +180,14 @@ EXPECTED_SECTIONS = (
         288,
     ),
 )
+DUAL_PORTAL_EXPECTED_SECTIONS = tuple(
+    (
+        f"DUAL_PORTAL_{index}",
+        SECTION_PORTAL_VIEW | SECTION_STRESS,
+        85 if index < 6 else 86,
+    )
+    for index in range(SECTION_COUNT)
+)
 
 
 class DecodeError(ValueError):
@@ -225,6 +241,7 @@ class Header:
     route_step_count: int
     wall_ticks: int
     hud_fps_tenths: int
+    benchmark_profile: int
     level_version: int
 
     @property
@@ -587,9 +604,10 @@ def _parse_header(payload: bytes) -> Header:
         route_step_count=payload[94],
         wall_ticks=_u32(payload, 96),
         hud_fps_tenths=_u16(payload, 100),
+        benchmark_profile=payload[102],
         level_version=payload[103],
     )
-    reserved_offsets = (7, 95, 102, *range(104, HEADER_SIZE))
+    reserved_offsets = (7, 95, *range(104, HEADER_SIZE))
     nonzero = [offset for offset in reserved_offsets if payload[offset] != 0]
     if nonzero:
         raise DecodeError(
@@ -603,6 +621,11 @@ def _parse_header(payload: bytes) -> Header:
     missing = REQUIRED_HEADER_FLAGS & ~header.flags
     if missing:
         raise DecodeError(f"required header flags are absent: 0x{missing:08X}")
+    if header.benchmark_profile not in BENCHMARK_PROFILE_NAMES:
+        raise DecodeError(
+            f"unknown benchmark profile {header.benchmark_profile}"
+        )
+    dual_portal_profile = header.benchmark_profile == DUAL_PORTAL_PROFILE
     expected_values = {
         "report_size": REPORT_SIZE,
         "section_count": SECTION_COUNT,
@@ -615,9 +638,11 @@ def _parse_header(payload: bytes) -> Header:
         "counter_count": COUNTER_COUNT,
         "simulation_ticks_per_second": 30,
         "elapsed_ticks_per_frame": 1,
-        "expected_crossings": EXPECTED_CROSSINGS,
+        "expected_crossings": 0 if dual_portal_profile else EXPECTED_CROSSINGS,
         "duplicate_report_size": REPORT_SIZE,
-        "route_step_count": ROUTE_STEP_COUNT,
+        "route_step_count": (
+            DUAL_PORTAL_ROUTE_STEP_COUNT if dual_portal_profile else ROUTE_STEP_COUNT
+        ),
         "hud_fps_tenths": 300,
         "level_version": 1,
     }
@@ -671,9 +696,14 @@ def parse_payload(
     payload: bytes, source: Path, wrapper: WrapperInfo
 ) -> LiveReport:
     header = _parse_header(payload)
+    expected_sections = (
+        DUAL_PORTAL_EXPECTED_SECTIONS
+        if header.benchmark_profile == DUAL_PORTAL_PROFILE
+        else EXPECTED_SECTIONS
+    )
     sections: list[Section] = []
     expected_first = 0
-    for index, expected_config in enumerate(EXPECTED_SECTIONS):
+    for index, expected_config in enumerate(expected_sections):
         offset = HEADER_SIZE + index * SECTION_RECORD_SIZE
         record = payload[offset : offset + SECTION_RECORD_SIZE]
         name = _decode_fixed_string(record[8:24], f"section {index + 1} name")
@@ -880,10 +910,15 @@ def parse_payload(
     crossing_frames = tuple(
         frame.index for frame in frames if frame.crossed_portal
     )
-    if crossing_frames != EXPECTED_CROSSING_FRAMES:
+    expected_crossing_frames = (
+        ()
+        if header.benchmark_profile == DUAL_PORTAL_PROFILE
+        else EXPECTED_CROSSING_FRAMES
+    )
+    if crossing_frames != expected_crossing_frames:
         raise DecodeError(
             f"portal crossings are at frames {crossing_frames}; expected "
-            f"{EXPECTED_CROSSING_FRAMES}"
+            f"{expected_crossing_frames}"
         )
     route_hash = _fnv1a(route_hash_parts)
     if route_hash != header.route_state_hash:
@@ -1135,6 +1170,10 @@ def summary_rows(report: LiveReport) -> list[dict[str, Any]]:
     metadata = {
         "build_version": _hex32(report.header.build_version),
         "route_fingerprint": _hex32(report.header.route_fingerprint),
+        "benchmark_profile": report.header.benchmark_profile,
+        "benchmark_profile_name": BENCHMARK_PROFILE_NAMES[
+            report.header.benchmark_profile
+        ],
         "warmup_frames": report.header.warmup_frames,
         "portal_crossings": report.header.actual_crossings,
         "graphics_init_ms": ticks_to_ms(
@@ -1362,6 +1401,7 @@ def _percent_change(current: float | None, baseline: float | None) -> float | No
 def compare_reports(current: LiveReport, baseline: LiveReport) -> dict[str, Any]:
     route_fields = (
         "route_fingerprint",
+        "benchmark_profile",
         "frame_count",
         "section_count",
         "render_width",
@@ -1569,6 +1609,9 @@ def _header_json(header: Header) -> dict[str, Any]:
             "flag_names": list(header.flag_names),
             "build_version_hex": _hex32(header.build_version),
             "route_fingerprint_hex": _hex32(header.route_fingerprint),
+            "benchmark_profile_name": BENCHMARK_PROFILE_NAMES[
+                header.benchmark_profile
+            ],
             "body_crc32_hex": _hex32(header.body_crc32),
             "route_state_hash_hex": _hex32(header.route_state_hash),
             "final_logical_hash_hex": _hex32(header.final_logical_hash),
@@ -1601,7 +1644,11 @@ def report_json(
             "reserved_fields": "valid",
             "section_frame_layout": "valid",
             "route_hash_and_endpoints": "valid",
-            "portal_crossing_frames": list(EXPECTED_CROSSING_FRAMES),
+            "portal_crossing_frames": list(
+                ()
+                if report.header.benchmark_profile == DUAL_PORTAL_PROFILE
+                else EXPECTED_CROSSING_FRAMES
+            ),
         },
         "wrapper": _wrapper_json(report.wrapper),
         "header": _header_json(report.header),
@@ -1720,6 +1767,7 @@ def print_summary(report: LiveReport) -> None:
     print(
         f"Build {_hex32(report.header.build_version)}, route "
         f"{_hex32(report.header.route_fingerprint)}, "
+        f"profile {BENCHMARK_PROFILE_NAMES[report.header.benchmark_profile]}, "
         f"{report.header.actual_crossings} crossings"
     )
     print(

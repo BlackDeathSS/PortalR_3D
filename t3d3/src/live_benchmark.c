@@ -34,7 +34,11 @@
 #define LIVE_SECTION_COUNT 10u
 #define LIVE_FRAME_COUNT 854u
 #define LIVE_WARMUP_FRAMES 16u
+#if T3D3_BODY_BENCHMARK == 3
+#define LIVE_EXPECTED_CROSSINGS 0u
+#else
 #define LIVE_EXPECTED_CROSSINGS 4u
+#endif
 #define LIVE_HUD_FPS_TENTHS 300u
 #define LIVE_REPORT_SIZE \
     (LIVE_HEADER_SIZE + \
@@ -93,6 +97,20 @@ typedef struct {
     uint16_t route_frame;
 } LiveController;
 
+#if T3D3_BODY_BENCHMARK == 3
+static const LiveSection live_sections[LIVE_SECTION_COUNT] = {
+    {"DUAL_PORTAL_0", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42},
+    {"DUAL_PORTAL_1", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42},
+    {"DUAL_PORTAL_2", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42},
+    {"DUAL_PORTAL_3", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42},
+    {"DUAL_PORTAL_4", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42},
+    {"DUAL_PORTAL_5", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42},
+    {"DUAL_PORTAL_6", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42},
+    {"DUAL_PORTAL_7", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42},
+    {"DUAL_PORTAL_8", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42},
+    {"DUAL_PORTAL_9", LIVE_SECTION_PORTAL_VIEW | LIVE_SECTION_STRESS, 42}
+};
+#else
 static const LiveSection live_sections[LIVE_SECTION_COUNT] = {
     {"OPEN_YAW", LIVE_SECTION_TURN, 1},
     {"PITCH_SWEEP", LIVE_SECTION_PITCH, 5},
@@ -110,11 +128,48 @@ static const LiveSection live_sections[LIVE_SECTION_COUNT] = {
     {"FREECAM_3D", LIVE_SECTION_PITCH | LIVE_SECTION_FREECAM |
         LIVE_SECTION_VERTICAL | LIVE_SECTION_STRESS, 46}
 };
+#endif
 
 /*
  * A real input recording at the 30 FPS target cadence.  Every frame executes
  * engine_update(), the full 64x48 renderer/presenter, HUD, and gfx_SwapDraw().
  */
+#if T3D3_BODY_BENCHMARK == 3
+#define DUAL_YAW_SECTION(section_number, idle_frames) \
+    {2, 1, 1, 0, 0, section_number}, \
+    {8, 1, 0, 0, 0, section_number}, \
+    {4, -1, -1, 0, 0, section_number}, \
+    {16, -1, 0, 0, 0, section_number}, \
+    {2, 1, 1, 0, 0, section_number}, \
+    {18, 1, 0, 0, 0, section_number}, \
+    {20, -1, 0, 0, 0, section_number}, \
+    {10, 1, 0, 0, 0, section_number}, \
+    {idle_frames, 0, 0, 0, 0, section_number}
+#define DUAL_PITCH_SECTION(section_number, idle_frames) \
+    {2, 1, 0, 1, 0, section_number}, \
+    {8, 1, 0, 0, 0, section_number}, \
+    {4, -1, 0, -1, 0, section_number}, \
+    {16, -1, 0, 0, 0, section_number}, \
+    {2, 1, 0, 1, 0, section_number}, \
+    {18, 1, 0, 0, 0, section_number}, \
+    {20, -1, 0, 0, 0, section_number}, \
+    {10, 1, 0, 0, 0, section_number}, \
+    {idle_frames, 0, 0, 0, 0, section_number}
+static const LiveRouteStep live_route[] = {
+    DUAL_YAW_SECTION(0, 5),
+    DUAL_YAW_SECTION(1, 5),
+    DUAL_YAW_SECTION(2, 5),
+    DUAL_YAW_SECTION(3, 5),
+    DUAL_YAW_SECTION(4, 5),
+    DUAL_PITCH_SECTION(5, 5),
+    DUAL_PITCH_SECTION(6, 6),
+    DUAL_PITCH_SECTION(7, 6),
+    DUAL_PITCH_SECTION(8, 6),
+    DUAL_PITCH_SECTION(9, 6)
+};
+#undef DUAL_PITCH_SECTION
+#undef DUAL_YAW_SECTION
+#else
 static const LiveRouteStep live_route[] = {
     {64, 0, 1, 0, 0, 0},
     {64, 0, -1, 0, 0, 0},
@@ -138,6 +193,7 @@ static const LiveRouteStep live_route[] = {
     {48, 0, 0, 0, ENGINE_BUTTON_FLY_DOWN, 9},
     {24, 1, 1, 0, 0, 9}
 };
+#endif
 
 #define LIVE_ROUTE_STEP_COUNT \
     ((uint8_t)(sizeof(live_route) / sizeof(live_route[0])))
@@ -354,6 +410,9 @@ static uint8_t live_reset_state(void) {
     uint8_t index;
 
     if (!engine_init(&live_state, &live_level)) return 0;
+    if (T3D3_BODY_BENCHMARK == 3) {
+        return engine_benchmark_configure_dual_portal_stress(&live_state);
+    }
     if (T3D3_BODY_BENCHMARK == 0) return 1;
     room = T3D3_BODY_BENCHMARK == 2 ? 1u : 0u;
     positions = room == 0 ? room_zero_bodies : room_one_bodies;
@@ -789,7 +848,7 @@ static void live_write_header(
     header[95] = 0;
     write_u32(header + 96, wall_ticks);
     write_u16(header + 100, LIVE_HUD_FPS_TENTHS);
-    header[102] = 0;
+    header[102] = T3D3_BODY_BENCHMARK;
     header[103] = TRUE3D_LEVEL_VERSION;
     write_u32(header + 60, live_crc32(
         live_report + LIVE_HEADER_SIZE,
@@ -837,7 +896,7 @@ static void live_show_result(
     os_PutStrFull("Frames: 854");
     os_SetCursorPos(3, 0);
     os_PutStrFull("Portal crossings: ");
-    os_PutStrFull(crossings == 4 ? "4" : "unexpected");
+    os_PutStrFull(crossings == LIVE_EXPECTED_CROSSINGS ? "expected" : "unexpected");
     os_SetCursorPos(5, 0);
     os_PutStrFull("Result: T3D3LIV");
     os_SetCursorPos(6, 0);

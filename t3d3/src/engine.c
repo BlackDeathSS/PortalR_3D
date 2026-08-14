@@ -227,7 +227,6 @@ void project_box_vertices_80(
     const uint16_t *near_scale,
     const uint16_t *far_scale
 );
-
 typedef struct {
     ScreenPoint point[MAX_POLYGON_VERTICES];
     uint8_t span_left[RENDER_HEIGHT];
@@ -259,6 +258,21 @@ typedef struct {
     int16_t horizon_row;
     uint8_t horizon_valid;
 } RenderLayer;
+
+/* A reduced portal destination can be shared by both gameplay apertures when
+ * their transformed cameras are exactly identical.  Keep the two original
+ * aperture clips outside RenderLayer so the shared scratch render can use a
+ * wider union clip without losing the exact masks used for composition. */
+typedef struct {
+    uint8_t row_left[RENDER_HEIGHT];
+    uint8_t row_right[RENDER_HEIGHT];
+    uint8_t first_row;
+    uint8_t last_row;
+    uint8_t bound_left;
+    uint8_t bound_right;
+    uint8_t lod_shift;
+    uint16_t pixel_area;
+} PortalClipSnapshot;
 
 typedef struct {
     uint8_t width;
@@ -335,15 +349,6 @@ static const uint8_t vertex_mask_bit[8] = {
 static const uint8_t box_face_vertex_mask[ROOM_FACE_COUNT] = {
     0x0Fu, 0xF0u, 0x33u, 0xCCu, 0x99u, 0x66u
 };
-static const uint8_t box_face_screen_byte_offset[ROOM_FACE_COUNT][4] = {
-    {0u, 18u, 12u, 6u},
-    {24u, 30u, 36u, 42u},
-    {0u, 6u, 30u, 24u},
-    {18u, 42u, 36u, 12u},
-    {0u, 24u, 42u, 18u},
-    {6u, 12u, 36u, 30u}
-};
-
 /* Quarter-wave Q8 sine table. Angles use 256 units per turn. */
 static const int16_t quarter_sine[65] = {
     0, 6, 13, 19, 25, 31, 38, 44, 50, 56, 62, 68, 74, 80, 86, 92,
@@ -386,6 +391,7 @@ static ScreenPoint screen_vertices[8];
 static uint8_t vertex_projectable[8];
 static CameraPoint clip_output[MAX_POLYGON_VERTICES];
 static RenderLayer render_layers[RENDER_LAYER_COUNT];
+static PortalClipSnapshot shared_portal_clip[PORTAL_COUNT];
 uint16_t low_row_offsets[RENDER_HEIGHT];
 static uint16_t projection_scale_table[NEAR_PROJECTION_DEPTH_COUNT];
 static uint16_t far_projection_scale_table[PROJECTION_TABLE_SIZE];
@@ -567,7 +573,7 @@ void present_low_frame_160_fast(void);
 _Static_assert(
         sizeof(camera_vertices) + sizeof(screen_vertices) +
         sizeof(vertex_projectable) + sizeof(clip_output) +
-        sizeof(render_layers) +
+        sizeof(render_layers) + sizeof(shared_portal_clip) +
         sizeof(low_frame) + sizeof(portal_lod_frame) + sizeof(low_row_offsets) +
         sizeof(portal_lod_state) + PRESENT_CACHE_STORAGE_SIZE +
         sizeof(horizon_light_subtract) +
@@ -924,6 +930,13 @@ static uint8_t polygon_intersects_layer(
     uint8_t last_row = layer->last_row;
     uint8_t index;
 
+    /* DrawPolygon records are reused across immediate-mode room, portal, and
+     * body faces.  Always seed the scan-conversion start from point zero
+     * before looking for a higher vertex; otherwise a face whose point zero
+     * is already highest inherits top_vertex from the previously drawn face
+     * and the rasterizer walks the wrong two edge chains. */
+    polygon->top_vertex = 0;
+
     for (index = 1; index < polygon->count; ++index) {
         if (polygon->point[index].x < minimum_x) minimum_x = polygon->point[index].x;
         if (polygon->point[index].x > maximum_x) maximum_x = polygon->point[index].x;
@@ -957,48 +970,6 @@ static uint8_t polygon_intersects_layer(
         minimum_x < (int24_t)(bound_right + 1u) * FIXED_ONE &&
         maximum_y >= (int24_t)first_row * FIXED_ONE &&
         minimum_y < (int24_t)(last_row + 1u) * FIXED_ONE
-    );
-}
-
-/* Full-detail body faces are unclipped quads in the common close-range path.
- * Their fixed four-point setup does not need the generic 3..8 vertex loop or
- * portal-LOD bound expansion. */
-static uint8_t body_quad_intersects_layer(
-    DrawPolygon *polygon,
-    const RenderLayer *layer
-) {
-    int24_t minimum_x = polygon->point[0].x;
-    int24_t maximum_x = minimum_x;
-    int24_t minimum_y = polygon->point[0].y;
-    int24_t maximum_y = minimum_y;
-    uint8_t top_vertex = 0;
-    uint8_t index;
-
-    for (index = 1u; index < 4u; ++index) {
-        int24_t x = polygon->point[index].x;
-        int24_t y = polygon->point[index].y;
-
-        if (x < minimum_x) minimum_x = x;
-        if (x > maximum_x) maximum_x = x;
-        if (y < minimum_y) {
-            minimum_y = y;
-            top_vertex = index;
-        }
-        if (y > maximum_y) maximum_y = y;
-    }
-    polygon->top_vertex = top_vertex;
-    polygon->sample_first_row = (int16_t)(
-        (minimum_y - FIXED_ONE / 2 + FIXED_ONE - 1) >> FIXED_SHIFT
-    );
-    polygon->sample_last_row = (int16_t)(
-        (maximum_y - 1 - FIXED_ONE / 2) >> FIXED_SHIFT
-    );
-    return (uint8_t)(
-        layer->first_row <= layer->last_row &&
-        maximum_x >= (int24_t)layer->bound_left * FIXED_ONE &&
-        minimum_x < (int24_t)(layer->bound_right + 1u) * FIXED_ONE &&
-        maximum_y >= (int24_t)layer->first_row * FIXED_ONE &&
-        minimum_y < (int24_t)(layer->last_row + 1u) * FIXED_ONE
     );
 }
 
@@ -1085,6 +1056,20 @@ static uint8_t room_exterior_face_mask(
     if (camera->position.x < room->minimum_x) mask |= 1u << 4;
     if (camera->position.x > room->maximum_x) mask |= 1u << 5;
     return mask == 0 ? 0x3Fu : mask;
+}
+
+static uint8_t camera_is_outside_room(
+    const Camera *camera,
+    const Room *room
+) {
+    return (uint8_t)(
+        camera->position.x < room->minimum_x ||
+        camera->position.x > room->maximum_x ||
+        camera->position.y < room->minimum_y ||
+        camera->position.y > room->maximum_y ||
+        camera->position.z < room->minimum_z ||
+        camera->position.z > room->maximum_z
+    );
 }
 
 static uint8_t transform_world_vertices(
@@ -1708,6 +1693,7 @@ void raster_fill_lod_segment_80(
     uint8_t horizon_shaded,
     uint8_t shift
 );
+void composite_portal_lod_half_80(const RenderLayer *layer);
 void composite_portal_lod_80(const RenderLayer *layer, uint8_t shift);
 #endif
 
@@ -2374,9 +2360,9 @@ static void rasterize_fill_polygon_lod(
     uint8_t sample_origin = step >> 1;
     uint8_t maximum_column __attribute__((unused)) =
         (active_render_width >> shift) - 1u;
-    uint8_t base_color =
+    uint8_t base_color __attribute__((unused)) =
         (uint8_t)(polygon->color + face_light_level[polygon->face_offset]);
-    uint8_t horizon_shaded = (uint8_t)(
+    uint8_t horizon_shaded __attribute__((unused)) = (uint8_t)(
         polygon->face_offset <= 1u && layer->horizon_valid
     );
     int16_t first_row = polygon->sample_first_row;
@@ -2618,7 +2604,11 @@ static __attribute__((unused)) void composite_portal_lod_quarter(
 static void composite_portal_lod(const RenderLayer *layer) {
     /* render_portal_lod is entered only for the two reduced-detail states. */
 #if RENDER_WIDTH == 80 && !TRUE3D_BENCHMARK_COUNTERS
-    composite_portal_lod_80(layer, layer->lod_shift);
+    if (layer->lod_shift == 1u) {
+        composite_portal_lod_half_80(layer);
+    } else {
+        composite_portal_lod_80(layer, layer->lod_shift);
+    }
 #else
     if (layer->lod_shift == 1u) {
         composite_portal_lod_half(layer);
@@ -2726,42 +2716,7 @@ static uint8_t body_fast_projected_bounds(
     );
 }
 
-/* Reject complete body AABBs against the current camera frustum before the
- * eight corners are built and projected. This is especially important for a
- * close row of cubes: the outer cubes can be wholly outside the 80x60 view
- * while their centers are still in front of the camera. */
-static uint8_t body_camera_bounds_visible(
-    CameraPoint center,
-    const CameraPoint *extent
-) {
-    fixed_t maximum_depth = center.depth + extent->depth;
-    fixed_t horizontal_limit;
-    fixed_t vertical_limit;
-
-    if (maximum_depth < NEAR_PLANE) return 0;
-    /* 61/64 and 49/64 are conservative outer bounds for the real 40/42 and
-     * 32/42 frustum ratios. The two-bit decompositions stay multiply-free;
-     * two fixed-point units cover truncation at the exact edge. */
-    horizontal_limit = maximum_depth - (maximum_depth >> 5) -
-        (maximum_depth >> 6) + 2;
-    vertical_limit = maximum_depth - (maximum_depth >> 2) +
-        (maximum_depth >> 6) + 2;
-    if (center.x + extent->x < -horizontal_limit) {
-        return 0;
-    }
-    if (center.x - extent->x >= horizontal_limit) {
-        return 0;
-    }
-    if (center.y - extent->y > vertical_limit) {
-        return 0;
-    }
-    if (-(center.y + extent->y) >= vertical_limit) {
-        return 0;
-    }
-    return 1;
-}
-
-static __attribute__((unused)) Vec3 body_face_inward(
+static Vec3 body_face_inward(
     const T3D3Body *body,
     uint8_t face_offset
 ) {
@@ -2780,6 +2735,23 @@ static __attribute__((unused)) Vec3 body_face_inward(
         result.z = -result.z;
     }
     return result;
+}
+
+/* Room lighting is indexed by the inward normal of a wall. A body's visible
+ * surface has the opposite (outward) normal, and its basis can be reoriented
+ * by portal traversal. Convert that transformed normal back to a world-light
+ * class instead of applying the room-face index directly. This keeps the top
+ * bright, the underside dark, and both lateral viewing directions consistent. */
+static uint8_t body_shading_face_offset(
+    const T3D3Body *body,
+    uint8_t face_offset
+) {
+    Vec3 inward = body_face_inward(body, face_offset);
+
+    if (inward.z > 0) return 5u;  /* outward -Z: darkest */
+    if (inward.z < 0) return 2u;  /* outward +Z: brightest */
+    if (inward.y != 0) return 4u; /* world Y faces: middle shade */
+    return 5u;                    /* world X faces: darkest wall shade */
 }
 
 static uint8_t body_projected_bounds(
@@ -2827,19 +2799,6 @@ static uint8_t body_projected_bounds(
     return (uint8_t)(
         *first_column <= *last_column && *first_row <= *last_row
     );
-}
-
-static void copy_projected_body_quad(
-    uint8_t face_offset,
-    DrawPolygon *polygon
-) {
-    const uint8_t *offset = box_face_screen_byte_offset[face_offset];
-    const uint8_t *source = (const uint8_t *)screen_vertices;
-
-    memcpy(&polygon->point[0], source + offset[0], sizeof(ScreenPoint));
-    memcpy(&polygon->point[1], source + offset[1], sizeof(ScreenPoint));
-    memcpy(&polygon->point[2], source + offset[2], sizeof(ScreenPoint));
-    memcpy(&polygon->point[3], source + offset[3], sizeof(ScreenPoint));
 }
 
 static void render_body_flat_lod(
@@ -2995,10 +2954,6 @@ static void render_body(
     uint8_t visible_count = 0;
     uint8_t visible_index;
     uint8_t visible_vertex_mask = 0;
-    uint8_t fully_projectable = (uint8_t)(
-        center.depth - projected_extent->depth >= NEAR_PLANE
-    );
-
     if ((layer->lod_shift != 0 || center.depth >= flat_lod_depth) &&
         body_fast_projected_bounds(
             center,
@@ -3023,7 +2978,6 @@ static void render_body(
         fixed_t local_z = signed_axis_component(camera_relative, body->basis_z);
         fixed_t local_y = signed_axis_component(camera_relative, body->basis_y);
         fixed_t local_x = signed_axis_component(camera_relative, body->basis_x);
-
         if (local_z < 0) visible_face[visible_count++] = 0u;
         else if (local_z > 0) visible_face[visible_count++] = 1u;
         if (local_y < 0) visible_face[visible_count++] = 2u;
@@ -3058,17 +3012,12 @@ static void render_body(
         uint8_t index;
         uint8_t inside_count = 0;
 
-        if (fully_projectable) {
-            copy_projected_body_quad(face_offset, polygon);
-            inside_count = 4u;
-        } else {
-            for (index = 0; index < 4u; ++index) {
-                uint8_t vertex = box_face_vertices[face_offset][index];
+        for (index = 0; index < 4u; ++index) {
+            uint8_t vertex = box_face_vertices[face_offset][index];
 
-                if (vertex_projectable[vertex]) {
-                    polygon->point[index] = screen_vertices[vertex];
-                    ++inside_count;
-                }
+            if (vertex_projectable[vertex]) {
+                polygon->point[index] = screen_vertices[vertex];
+                ++inside_count;
             }
         }
         if (inside_count == 0) continue;
@@ -3077,18 +3026,13 @@ static void render_body(
         } else if (!clip_cached_face_and_project(face_offset, polygon)) {
             continue;
         }
-        polygon->top_vertex = 0;
-        if (inside_count == 4u) {
-            if (!body_quad_intersects_layer(polygon, layer)) continue;
-        } else if (!polygon_intersects_layer(polygon, layer)) {
-            continue;
-        }
+        if (!polygon_intersects_layer(polygon, layer)) continue;
         polygon->color = (uint8_t)(
             SHADED_PALETTE_FIRST + (body->color << 2)
         );
         polygon->portal = NO_PORTAL;
         polygon->face = NO_PORTAL;
-        polygon->face_offset = face_offset;
+        polygon->face_offset = body_shading_face_offset(body, face_offset);
         if (layer->lod_shift == 0) {
             rasterize_fill_polygon_full(polygon, layer);
         } else {
@@ -3114,7 +3058,13 @@ static void render_bodies(const Camera *camera, RenderLayer *layer) {
 
         if (!bodies[index].active || bodies[index].room != camera->room) continue;
         transformed_center = transform_point(camera, bodies[index].position);
-        if (transformed_center.depth + bodies[index].half_extent < NEAR_PLANE) {
+        /* At an oblique yaw/pitch, a cube's camera-depth radius is the sum of
+         * all three projected half-axes (up to sqrt(3) * half_extent), not one
+         * half_extent.  Two extents is a cheap conservative bound and avoids
+         * dropping a cube while some of its corners still cross the near
+         * plane.  The exact extent is computed below for surviving bodies. */
+        if (transformed_center.depth +
+                (fixed_t)(bodies[index].half_extent << 1) < NEAR_PLANE) {
             continue;
         }
         insert = count;
@@ -3157,12 +3107,6 @@ static void render_bodies(const Camera *camera, RenderLayer *layer) {
                 fixed_absolute(cached_world_axis[1].depth) +
                 fixed_absolute(cached_world_axis[2].depth);
         }
-        if (!body_camera_bounds_visible(
-                body_center[order[index]],
-                &cached_projected_extent
-            )) {
-            continue;
-        }
         render_body(
             body,
             camera,
@@ -3182,7 +3126,6 @@ static void render_room_faces_immediate(
     uint8_t lod
 ) {
     const Room *room = &rooms[camera->room];
-    uint8_t face_mask = 0x3Fu;
     uint8_t offset;
 
     if (!prepare_room_geometry(layer, camera, 0)) {
@@ -3190,53 +3133,10 @@ static void render_room_faces_immediate(
         layer->solid_count = 0;
         return;
     }
-    if (lod != 0u && layer->lod_shift == 2u) {
-        fixed_t horizontal_x = fixed_absolute(camera->forward.x);
-        fixed_t horizontal_y = fixed_absolute(camera->forward.y);
-        uint8_t forward_face;
-        uint8_t row;
-
-        if (horizontal_x > horizontal_y) {
-            forward_face = camera->forward.x > 0 ? 5u : 4u;
-        } else {
-            forward_face = camera->forward.y > 0 ? 3u : 2u;
-        }
-        /* At 20x15, establish floor/ceiling depth bands directly and reserve
-         * polygon setup for the dominant forward wall. This retains the three
-         * principal depth cues without paying twelve mostly subpixel edges. */
-        for (row = 2u; row < active_render_height; row += 4u) {
-            uint8_t left;
-            uint8_t right;
-            uint8_t target_first;
-            uint8_t target_last;
-            uint8_t color;
-
-            if (row < layer->first_row || row > layer->last_row) continue;
-            left = layer->row_left[row];
-            right = layer->row_right[row];
-            if (left > right || right < 2u) continue;
-            target_first = left <= 2u ? 0u : (uint8_t)((left + 1u) >> 2);
-            target_last = (uint8_t)((right - 2u) >> 2);
-            color = row < layer->horizon_row ?
-                (uint8_t)(world_faces[room->first_face + 1u].color + 2u) :
-                (uint8_t)(world_faces[room->first_face].color + 2u);
-            if (target_first <= target_last) {
-                memset(
-                    &portal_lod_frame[
-                        (uint16_t)(row >> 2) * PORTAL_LOD_STRIDE + target_first
-                    ],
-                    color,
-                    (size_t)(target_last - target_first + 1u)
-                );
-            }
-        }
-        face_mask = (uint8_t)(1u << forward_face);
-    }
     for (offset = 0; offset < ROOM_FACE_COUNT; ++offset) {
         uint8_t face_index = room->first_face + offset;
         DrawPolygon *polygon = &layer->polygon[0];
 
-        if ((face_mask & (1u << offset)) == 0u) continue;
         if (face_index == skipped_face) continue;
         if (!prepare_face_polygon(layer, face_index, offset, polygon)) continue;
         if (lod != 0) {
@@ -3250,7 +3150,7 @@ static void render_room_faces_immediate(
     layer->solid_count = 0;
 }
 
-static void render_portal_lod(
+static void render_portal_lod_scratch(
     const Camera *camera,
     RenderLayer *layer,
     uint8_t skipped_face
@@ -3259,6 +3159,14 @@ static void render_portal_lod(
     clear_portal_lod(layer);
     RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_GEOMETRY);
     render_room_faces_immediate(camera, layer, skipped_face, 1);
+}
+
+static void render_portal_lod(
+    const Camera *camera,
+    RenderLayer *layer,
+    uint8_t skipped_face
+) {
+    render_portal_lod_scratch(camera, layer, skipped_face);
     RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_FILL);
     composite_portal_lod(layer);
 }
@@ -3270,15 +3178,227 @@ static void render_camera(
     uint8_t allow_room_cull
 );
 
+static uint8_t camera_exactly_equal(const Camera *first, const Camera *second) {
+    return (uint8_t)(
+        first->position.x == second->position.x &&
+        first->position.y == second->position.y &&
+        first->position.z == second->position.z &&
+        first->right.x == second->right.x &&
+        first->right.y == second->right.y &&
+        first->right.z == second->right.z &&
+        first->up.x == second->up.x &&
+        first->up.y == second->up.y &&
+        first->up.z == second->up.z &&
+        first->forward.x == second->forward.x &&
+        first->forward.y == second->forward.y &&
+        first->forward.z == second->forward.z &&
+        first->room == second->room
+    );
+}
+
+static uint8_t portal_pair_has_shared_transform(
+    const DrawPolygon *first,
+    const DrawPolygon *second
+) {
+    const Portal *first_portal;
+    const Portal *second_portal;
+    Vec3 center_delta;
+
+    if (first->portal >= PORTAL_COUNT || second->portal >= PORTAL_COUNT ||
+        first->portal == second->portal) {
+        return 0;
+    }
+    first_portal = &portals[first->portal];
+    second_portal = &portals[second->portal];
+    if (first_portal->linked != second->portal ||
+        second_portal->linked != first->portal ||
+        first_portal->room != second_portal->room ||
+        first_portal->host_face != second_portal->host_face ||
+        first_portal->right.x != second_portal->right.x ||
+        first_portal->right.y != second_portal->right.y ||
+        first_portal->right.z != second_portal->right.z ||
+        first_portal->up.x != second_portal->up.x ||
+        first_portal->up.y != second_portal->up.y ||
+        first_portal->up.z != second_portal->up.z ||
+        first_portal->normal.x != second_portal->normal.x ||
+        first_portal->normal.y != second_portal->normal.y ||
+        first_portal->normal.z != second_portal->normal.z) {
+        return 0;
+    }
+    center_delta = vec_subtract(second_portal->center, first_portal->center);
+    return signed_axis_component(center_delta, first_portal->up) == 0;
+}
+
+static void capture_portal_clip(
+    PortalClipSnapshot *snapshot,
+    const RenderLayer *layer
+) {
+    uint8_t row;
+
+    snapshot->first_row = layer->first_row;
+    snapshot->last_row = layer->last_row;
+    snapshot->bound_left = layer->bound_left;
+    snapshot->bound_right = layer->bound_right;
+    snapshot->lod_shift = layer->lod_shift;
+    snapshot->pixel_area = layer->pixel_area;
+    for (row = layer->first_row; row <= layer->last_row; ++row) {
+        snapshot->row_left[row] = layer->row_left[row];
+        snapshot->row_right[row] = layer->row_right[row];
+    }
+}
+
+static void restore_portal_clip(
+    RenderLayer *layer,
+    const PortalClipSnapshot *snapshot
+) {
+    uint8_t row;
+
+    layer->first_row = snapshot->first_row;
+    layer->last_row = snapshot->last_row;
+    layer->bound_left = snapshot->bound_left;
+    layer->bound_right = snapshot->bound_right;
+    layer->lod_shift = snapshot->lod_shift;
+    layer->pixel_area = snapshot->pixel_area;
+    for (row = snapshot->first_row; row <= snapshot->last_row; ++row) {
+        layer->row_left[row] = snapshot->row_left[row];
+        layer->row_right[row] = snapshot->row_right[row];
+    }
+}
+
+static void build_shared_portal_union(RenderLayer *layer) {
+    uint8_t row;
+
+    layer->first_row = shared_portal_clip[0].first_row <
+            shared_portal_clip[1].first_row ?
+        shared_portal_clip[0].first_row : shared_portal_clip[1].first_row;
+    layer->last_row = shared_portal_clip[0].last_row >
+            shared_portal_clip[1].last_row ?
+        shared_portal_clip[0].last_row : shared_portal_clip[1].last_row;
+    layer->bound_left = active_render_width;
+    layer->bound_right = 0u;
+    layer->pixel_area = 0u;
+    layer->lod_shift = shared_portal_clip[0].lod_shift;
+    for (row = layer->first_row; row <= layer->last_row; ++row) {
+        uint8_t first_valid = (uint8_t)(
+            row >= shared_portal_clip[0].first_row &&
+            row <= shared_portal_clip[0].last_row &&
+            shared_portal_clip[0].row_left[row] <=
+                shared_portal_clip[0].row_right[row]
+        );
+        uint8_t second_valid = (uint8_t)(
+            row >= shared_portal_clip[1].first_row &&
+            row <= shared_portal_clip[1].last_row &&
+            shared_portal_clip[1].row_left[row] <=
+                shared_portal_clip[1].row_right[row]
+        );
+        uint8_t left;
+        uint8_t right;
+
+        if (!first_valid && !second_valid) {
+            layer->row_left[row] = 255u;
+            layer->row_right[row] = 0u;
+            continue;
+        }
+        if (!second_valid || (first_valid &&
+                shared_portal_clip[0].row_left[row] <
+                    shared_portal_clip[1].row_left[row])) {
+            left = shared_portal_clip[0].row_left[row];
+        } else {
+            left = shared_portal_clip[1].row_left[row];
+        }
+        if (!second_valid || (first_valid &&
+                shared_portal_clip[0].row_right[row] >
+                    shared_portal_clip[1].row_right[row])) {
+            right = shared_portal_clip[0].row_right[row];
+        } else {
+            right = shared_portal_clip[1].row_right[row];
+        }
+        layer->row_left[row] = left;
+        layer->row_right[row] = right;
+        layer->pixel_area += (uint16_t)(right - left + 1u);
+        if (left < layer->bound_left) layer->bound_left = left;
+        if (right > layer->bound_right) layer->bound_right = right;
+    }
+}
+
+/* A symmetric, coplanar portal pair can map both apertures to the exact same
+ * destination camera.  Reduced-detail rendering already uses a scratch
+ * buffer, so render that camera once over the union clip, then composite it
+ * through the two saved aperture masks.  Full-detail children write directly
+ * into the root frame and therefore retain the ordinary two-pass path. */
+static uint8_t render_shared_reduced_portal_pair(
+    const Camera *camera,
+    RenderLayer *parent,
+    uint8_t depth
+) {
+    RenderLayer *child;
+    Camera destination[PORTAL_COUNT];
+    uint8_t destination_face[PORTAL_COUNT];
+    uint8_t index;
+
+    if (depth >= PORTAL_RECURSION_LIMIT || parent->count != PORTAL_COUNT) {
+        return 0;
+    }
+    if (!portal_pair_has_shared_transform(
+            &parent->polygon[0],
+            &parent->polygon[1]
+        )) {
+        return 0;
+    }
+    /* Avoid duplicate clip setup on the ordinary full-detail path.  A portal
+     * that has just crossed into reduced LOD becomes shareable next frame. */
+    if (portal_lod_state[parent->polygon[0].portal] == 0u ||
+        portal_lod_state[parent->polygon[1].portal] == 0u) {
+        return 0;
+    }
+    child = &render_layers[depth + 1u];
+    for (index = 0; index < PORTAL_COUNT; ++index) {
+        const DrawPolygon *polygon = &parent->polygon[index];
+
+        destination[index] = transform_portal_camera(polygon->portal, camera);
+        destination_face[index] =
+            portals[portals[polygon->portal].linked].host_face;
+    }
+    if (destination_face[0] != destination_face[1] ||
+        !camera_exactly_equal(&destination[0], &destination[1])) {
+        return 0;
+    }
+    for (index = 0; index < PORTAL_COUNT; ++index) {
+        if (!build_portal_clip(&parent->polygon[index], parent, child)) return 0;
+        capture_portal_clip(&shared_portal_clip[index], child);
+    }
+    if (shared_portal_clip[0].lod_shift == 0u ||
+        shared_portal_clip[0].lod_shift != shared_portal_clip[1].lod_shift) {
+        return 0;
+    }
+
+    build_shared_portal_union(child);
+    render_portal_lod_scratch(&destination[0], child, destination_face[0]);
+    for (index = 0; index < PORTAL_COUNT; ++index) {
+        restore_portal_clip(child, &shared_portal_clip[index]);
+        RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_FILL);
+        composite_portal_lod(child);
+        draw_portal_outline(child, parent->polygon[index].color);
+    }
+    return 1;
+}
+
 /* When a nearby portal covers every root pixel, none of the source room's
  * six wall polygons can contribute to the image. Detect that exact case from
  * the aperture itself and render only the destination camera. */
-static uint8_t render_fullscreen_portal(const Camera *camera) {
+static uint8_t render_fullscreen_portal(
+    const Camera *camera,
+    uint8_t allow_room_cull
+) {
     const Room *room = &rooms[camera->room];
     RenderLayer *root = &render_layers[0];
     RenderLayer *child = &render_layers[1];
     uint8_t portal_index;
     uint8_t candidate = NO_PORTAL;
+
+    /* The exterior shell is opaque. In noclip, neither a portal on its far
+     * side nor its destination may replace the shell before root rendering. */
+    if (allow_room_cull && camera_is_outside_room(camera, room)) return 0;
 
     for (portal_index = 0; portal_index < PORTAL_COUNT; ++portal_index) {
         const Portal *portal = &portals[portal_index];
@@ -3343,6 +3463,7 @@ static void render_camera(
     const Room *room = &rooms[camera->room];
     uint8_t face_visible[ROOM_FACE_COUNT] = {0, 0, 0, 0, 0, 0};
     uint8_t exterior_face_mask;
+    uint8_t exterior_view;
     uint8_t index;
 
     if (depth != 0) {
@@ -3359,6 +3480,9 @@ static void render_camera(
     layer->count = 0;
     layer->solid_count = 0;
     if (!prepare_room_geometry(layer, camera, allow_room_cull)) return;
+    exterior_view = (uint8_t)(
+        allow_room_cull && camera_is_outside_room(camera, room)
+    );
     exterior_face_mask = room_exterior_face_mask(camera, room, allow_room_cull);
     for (index = 0; index < ROOM_FACE_COUNT; ++index) {
         uint8_t face_index = room->first_face + index;
@@ -3372,7 +3496,7 @@ static void render_camera(
         rasterize_fill_polygon_full(polygon, layer);
         RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_ROOT_GEOMETRY);
     }
-    for (index = 0; index < PORTAL_COUNT; ++index) {
+    for (index = 0; !exterior_view && index < PORTAL_COUNT; ++index) {
         const Portal *portal = &portals[index];
         uint8_t host_offset;
 
@@ -3388,26 +3512,35 @@ static void render_camera(
     }
     layer->solid_count = 0;
     if (depth < PORTAL_RECURSION_LIMIT) {
-        for (index = layer->solid_count; index < layer->count; ++index) {
-            DrawPolygon *polygon = &layer->polygon[index];
-            RenderLayer *child = &render_layers[depth + 1];
-            Camera destination;
-            uint8_t destination_face;
+        RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_SETUP);
+        if (!render_shared_reduced_portal_pair(camera, layer, depth)) {
+            for (index = layer->solid_count; index < layer->count; ++index) {
+                DrawPolygon *polygon = &layer->polygon[index];
+                RenderLayer *child = &render_layers[depth + 1];
+                Camera destination;
+                uint8_t destination_face;
 
-            RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_SETUP);
-            if (!build_portal_clip(polygon, layer, child)) continue;
-            destination = transform_portal_camera(polygon->portal, camera);
-            destination_face = portals[portals[polygon->portal].linked].host_face;
-            if (child->lod_shift == 0) {
-                render_camera(&destination, depth + 1, destination_face, 0);
-            } else {
-                render_portal_lod(&destination, child, destination_face);
+                RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_SETUP);
+                if (!build_portal_clip(polygon, layer, child)) continue;
+                destination = transform_portal_camera(polygon->portal, camera);
+                destination_face = portals[portals[polygon->portal].linked].host_face;
+                if (child->lod_shift == 0) {
+                    render_camera(&destination, depth + 1, destination_face, 0);
+                } else {
+                    render_portal_lod(&destination, child, destination_face);
+                }
+                RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_FILL);
+                draw_portal_outline(child, polygon->color);
             }
-            RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PORTAL_FILL);
-            draw_portal_outline(child, polygon->color);
         }
     }
-    render_bodies(camera, layer);
+    if (!exterior_view) {
+        /* Portal rendering leaves the phase timer in PORTAL_FILL. Attribute
+         * root-body projection and rasterization to root geometry explicitly
+         * so portal composition is not blamed for the four-cube cost. */
+        RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_ROOT_GEOMETRY);
+        render_bodies(camera, layer);
+    }
 }
 
 static void recover_camera_angles(EngineState *state) {
@@ -4496,6 +4629,60 @@ uint8_t engine_init(EngineState *state, const True3DLevelView *level) {
     return 1;
 }
 
+#if TRUE3D_RENDER_BENCHMARK
+/* Fixed, authored stress view used by the body benchmark layout 3.  Both
+ * linked portals occupy the far wall while four full-detail cubes cover the
+ * root view and are repeated in each destination aperture.  Keeping fixture
+ * setup inside the engine avoids exposing portal internals in the runtime ABI. */
+uint8_t engine_benchmark_configure_dual_portal_stress(EngineState *state) {
+    static const Vec3 positions[T3D3_MAX_BODIES] = {
+        {-3 * FIXED_ONE, 6 * FIXED_ONE, BODY_DEFAULT_HALF_EXTENT},
+        {-1 * FIXED_ONE, 7 * FIXED_ONE, BODY_DEFAULT_HALF_EXTENT},
+        { 1 * FIXED_ONE, 7 * FIXED_ONE, BODY_DEFAULT_HALF_EXTENT},
+        { 3 * FIXED_ONE, 6 * FIXED_ONE, BODY_DEFAULT_HALF_EXTENT}
+    };
+    uint8_t index;
+
+    if (state == NULL || room_count == 0u) return 0;
+    configure_portal_on_face(
+        0u,
+        0u,
+        3u,
+        (Vec3){-2 * FIXED_ONE, 10 * FIXED_ONE, 2 * FIXED_ONE}
+    );
+    configure_portal_on_face(
+        1u,
+        0u,
+        3u,
+        (Vec3){ 2 * FIXED_ONE, 10 * FIXED_ONE, 2 * FIXED_ONE}
+    );
+    state->position = (Vec3){0, 2 * FIXED_ONE, PLAYER_EYE_HEIGHT};
+    state->velocity = (Vec3){0, 0, 0};
+    state->yaw = 64u;
+    state->pitch = 0;
+    state->room = 0u;
+    state->previous_buttons = 0u;
+    state->grounded = 1u;
+    state->dev_mode = 0u;
+    state->render_shift = 0u;
+    state->noclip = 0u;
+    rebuild_camera_basis(state);
+    collide_with_room(state, &state->position);
+    engine_bodies_reset();
+    for (index = 0; index < T3D3_MAX_BODIES; ++index) {
+        if (engine_spawn_body(
+                positions[index],
+                0u,
+                BODY_DEFAULT_HALF_EXTENT,
+                COLOR_WALL_RED
+            ) == 0u) {
+            return 0;
+        }
+    }
+    return 1;
+}
+#endif
+
 static void configure_render_mode(uint8_t shift) {
     uint8_t row;
     uint16_t offset = 0;
@@ -4988,7 +5175,10 @@ void engine_render(const EngineState *state, uint16_t fps_tenths) {
         render_layers[0].row_left[row] = 0;
         render_layers[0].row_right[row] = active_render_width - 1;
     }
-    if (!render_fullscreen_portal(&camera)) {
+    if (!render_fullscreen_portal(
+            &camera,
+            (uint8_t)(state->dev_mode && state->noclip)
+        )) {
         render_camera(
             &camera,
             0,

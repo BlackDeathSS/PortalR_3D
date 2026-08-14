@@ -37,19 +37,19 @@
       "description": "Player pushing a free cube",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["0D0DC8AA", "B00ED10B", "9B2A9161", "C609C08E", "4BF06F3C", "1EB4C0FF", "ADB166EF", "5E56BED2", "32E693A0", "C7516044"]
+      "expected_CRCs": ["0D0DC8AA", "B00ED10B", "9B2A9161", "C609C08E", "4BF06F3C", "1EB4C0FF", "ADB166EF", "5E56BED2", "32E693A0", "C7516044", "C8BEABE7", "772B445C", "DDFE8B1A", "63B4F5BD"]
     },
     "pushed_player": {
       "description": "Player state after pushing a free cube",
-      "start": "0xD1026C",
+      "start": "0xD1036C",
       "size": "0x35",
-      "expected_CRCs": ["3335EE56", "E8056623", "25CA5B84", "AC41386A", "F5F112A1", "4DF1EFFA", "6A54A209", "8BA85440", "50F3B5A8"]
+      "expected_CRCs": ["3335EE56", "E8056623", "25CA5B84", "AC41386A", "F5F112A1", "4DF1EFFA", "6A54A209", "8BA85440", "50F3B5A8", "38C801D6", "026F1677", "BA23CAF5", "5BDF3CBC", "140DE4E8"]
     },
     "pushed_body": {
       "description": "Body pool after player push",
       "start": "0xD052C6",
       "size": "0x1A8",
-      "expected_CRCs": ["F7D1CD58", "CDD8EE3C", "1FD3DEA1", "7EBEB4A5", "65145EEB", "BDA0F810", "6E6F5030", "3E70178B"]
+      "expected_CRCs": ["F7D1CD58", "CDD8EE3C", "1FD3DEA1", "7EBEB4A5", "65145EEB", "BDA0F810", "6E6F5030", "3E70178B", "ACB58438", "2F656BA3", "9DC7A987", "4E0801A7", "AD711C85"]
     },
     "blocked_view": {
       "description": "Cube and player stopped at the room boundary",
@@ -59,7 +59,7 @@
     },
     "blocked_player": {
       "description": "Blocked player state",
-      "start": "0xD1026C",
+      "start": "0xD1036C",
       "size": "0x35",
       "expected_CRCs": ["A7852339", "1A8B440F"]
     },

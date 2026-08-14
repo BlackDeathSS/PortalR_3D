@@ -22,7 +22,7 @@
 #endif
 
 /* Stable YYMMDD/revision ID written into every benchmark result. */
-#define TRUE3D_BUILD_VERSION 0x26081304UL
+#define TRUE3D_BUILD_VERSION 0x26081309UL
 
 #ifndef TRUE3D_RENDER_BENCHMARK
 #define TRUE3D_RENDER_BENCHMARK 0
@@ -137,6 +137,7 @@ const T3D3Body *engine_body_read(uint8_t index);
 uint8_t engine_held_body(void);
 
 #if TRUE3D_RENDER_BENCHMARK
+uint8_t engine_benchmark_configure_dual_portal_stress(EngineState *state);
 void engine_render_benchmark_reset(void);
 void engine_render_benchmark_begin(void);
 void engine_render_benchmark_end(void);

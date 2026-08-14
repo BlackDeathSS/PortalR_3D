@@ -19,45 +19,50 @@ and is stopped when a pushed cube is pinned against a room boundary. Player
 pushes wake sleeping cubes and can carry a cube through a correctly aligned
 portal crossing.
 
-Build `0x26081304` keeps 80x60 as the normal `T3D3DEV` configuration. Convex
-room faces, full-resolution flat cubes, reduced portal faces, and reduced
-portal composition now use segment-wide assembly loops instead of returning to
-C for every row. Reduced destination spans are limited to the portal bounds,
-and settled body pairs are skipped until an interaction wakes either body. An
-exact bounded camera-angle recovery removes 21-22 ms from each portal-crossing
-spike. Equal-size cube projected extents are cached once per camera and reused
-for every body bound. A conservative camera-space body AABB test now removes
-complete off-screen cubes before corner construction, projection, clipping,
-and face rasterization. The repeatable CEmu route runs at 37.20 FPS with no
-cubes, 32.35 FPS with four cubes in the root room, and 28.51 FPS with four
-cubes in the portal destination. Their 1% lows are 19.75, 16.94, and 17.17 FPS
-respectively; all 854 per-frame simulation hashes remain exact. The 80x60
-presenter now compares each 16-pixel group as two independent
-8-pixel halves, so a moving edge updates 32x4 physical pixels instead of 64x4.
-Uniform half-runs use a direct overlapping-`LDIR` fill. Portal clip setup and
-horizon shading touch only aperture rows, and outside noclip views render only
-the convex room faces on the camera side.
+Build `0x26081309` retains the restored `0x26081303` geometry path after the
+04-06 cube experiments caused close-face loss, distorted projections, and
+hardware lows near 11 FPS. The restored path uses the shared C cube transform,
+the proven eight-vertex projector, near clipping, generic convex face setup,
+and the established root/portal scan converters. It deliberately removes the
+later cube AABB shortcut, fixed-quad setup, 20x15 principal-plane reduction,
+assembly corner transform, and direct cube scan-conversion/batching paths.
 
-Developer noclip now rejects the entire current-room AABB before projecting
-corners or preparing horizon rows when the camera is outside and the room is
-fully beyond a conservative frustum. Conservative edge bounds prevent
-popping. In the supplied-ROM CEmu noclip route, looking away reaches 148.3 FPS
-and turning with the room still completely off-screen reaches 148.0 FPS. A
-partially visible exterior view improves from 78.2 to 89.1 FPS. Normal gameplay remains on the original hot
-path and retains its exact state hashes while raising the no-body route to
-37.20 FPS.
+Build 09 fixes the remaining direction-dependent missing-face regression in
+that generic path. Reused polygon scratch could inherit the previous face's
+`top_vertex`, causing the two-chain rasterizer to start from the wrong edge.
+The common bounds routine now initializes it for every face. A conservative
+oblique near-plane bound also prevents rejecting a whole cube while visible
+corners remain. Five held-cube angles and seven close near-clipped angles pass
+with complete convex silhouettes.
 
-The native 80x60 root renderer now uses a dedicated assembly scan-conversion
-kernel. It keeps a running logical-row address and omits portal aperture-array
-lookups that are always redundant for the root layer. The clipped portal
-kernel likewise caches its row-left, row-right, and destination cursors across
-scanlines. Full-detail cube faces now use a fixed-quad bounds/setup path, while
-the 20x15 portal state directly establishes its floor/ceiling bands and scans
-only the dominant forward wall. Half/full portal views retain complete room
-geometry. The eight-unit cube LOD range is unchanged. Relative to build
-`0x26081303`, root-four rises from 30.53 to 32.35 FPS and its 1% low from 16.03
-to 16.94; portal-four rises from 27.51 to 28.51 FPS and its 1% low from 16.92
-to 17.17.
+Additional isolated fixes are applied on top of 03. Developer noclip treats the
+exterior room shell as opaque, suppressing portal recursion, fullscreen portal
+replacement, and interior cubes while the camera is outside. Cube lighting now
+uses the transformed outward surface normal rather than the room wall's inward
+normal and assigns distinct levels to the three cube axes: bright top, medium
+front/back, and dark sides. Lighting remains correct after portal traversal.
+
+The `dual-portal-four` stress profile keeps both wall portals and all four
+root-room cubes visible. It confirms the reported 12-13 FPS tail: the first
+honest run measured 14.58 FPS average / 12.02 FPS 1% low. A specialized
+half-resolution compositor plus exact duplicate-destination sharing improve
+that to 16.09 / 12.98 without changing any simulation, logical-frame, or
+presented-frame endpoint hash. Non-equivalent portal views retain the original
+two-pass renderer.
+
+Developer noclip retains the conservative whole-room AABB rejection from the
+03 base, before corner projection and horizon setup. Conservative edge bounds
+prevent popping. The historical supplied-ROM route reached about 148 FPS while
+the room was fully outside the frustum and 89 FPS with an exterior face
+visible. Normal gameplay stays on the original hot path; the current no-body
+certification route measures 36.98 FPS.
+
+The native 80x60 root renderer retains build 03's dedicated assembly
+scan-conversion kernel and running logical-row address. The clipped portal
+kernel retains cached row-left, row-right, and destination cursors. Cube faces
+use the generic clipped convex-polygon setup, and every 20x15/40x30/80x60
+portal state renders complete room geometry. The eight-unit cube LOD range is
+unchanged.
 
 Floor-resting cubes can now be pushed directly through a wall portal. The body
 aperture test preserves an exact floor-aligned fit instead of rejecting it with

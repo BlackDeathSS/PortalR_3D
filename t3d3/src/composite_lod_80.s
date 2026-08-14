@@ -189,3 +189,161 @@ _composite_portal_lod_80:
 	ret
 
 	.size	_composite_portal_lod_80, .-_composite_portal_lod_80
+
+	.globl	_composite_portal_lod_half_80
+	.type	_composite_portal_lod_half_80,@function
+
+/* Hot half-resolution compositor.  Unlike the general shift-1/shift-2 path,
+ * this keeps the aperture cursors, destination row, and packed source row
+ * live across scanlines.  That removes two RenderLayer base rebuilds, one row
+ * table lookup, and one multiply from every aperture row.
+ *
+ *   ix+6  RenderLayer *
+ */
+_composite_portal_lod_half_80:
+	ld	hl, -16
+	call	__frameset
+	ld	iy, (ix + 6)
+	ld	de, 1578
+	add	iy, de
+	ld	a, (iy)
+	ld	(ix - 1), a		/* current row */
+	ld	a, (iy + 1)
+	ld	(ix - 2), a		/* last row */
+
+	/* row_left + first row */
+	ld	hl, (ix + 6)
+	ld	de, 1456
+	add	hl, de
+	ld	de, 0
+	ld	e, (ix - 1)
+	add	hl, de
+	ld	(ix - 6), hl
+
+	/* row_right + first row */
+	ld	hl, (ix + 6)
+	ld	de, 1516
+	add	hl, de
+	ld	de, 0
+	ld	e, (ix - 1)
+	add	hl, de
+	ld	(ix - 9), hl
+
+	/* Logical destination row. */
+	ld	iy, _low_row_offsets
+	ld	de, 0
+	ld	a, (ix - 1)
+	add	a, a
+	ld	e, a
+	add	iy, de
+	ld	de, 0
+	ld	e, (iy)
+	ld	d, (iy + 1)
+	ld	hl, _low_frame+2
+	add	hl, de
+	ld	(ix - 12), hl
+
+	/* Packed half-resolution source row. */
+	ld	a, (ix - 1)
+	srl	a
+	ld	de, 0
+	ld	d, 40
+	ld	e, a
+	mlt	de
+	ld	hl, _portal_lod_frame
+	add	hl, de
+	ld	(ix - 15), hl
+
+.Lhalf_row:
+	ld	hl, (ix - 6)
+	ld	a, (hl)
+	ld	(ix - 16), a		/* left */
+	inc	hl
+	ld	(ix - 6), hl
+	ld	hl, (ix - 9)
+	ld	a, (hl)			/* right */
+	inc	hl
+	ld	(ix - 9), hl
+	ld	c, (ix - 16)
+	cp	a, c
+	jr	c, .Lhalf_next_row
+	sub	a, c
+	inc	a
+	ld	(ix - 3), a		/* pixel count */
+
+	/* HL = destination row + left. */
+	ld	hl, (ix - 12)
+	ld	de, 0
+	ld	e, c
+	add	hl, de
+
+	/* IY = source row + left / 2. */
+	ld	iy, (ix - 15)
+	ld	a, c
+	srl	a
+	ld	de, 0
+	ld	e, a
+	add	iy, de
+
+	/* An odd left edge consumes the second pixel of its source sample. */
+	bit	0, c
+	jr	z, .Lhalf_pair_setup
+	ld	a, (iy)
+	ld	(hl), a
+	inc	hl
+	inc	iy
+	ld	a, (ix - 3)
+	dec	a
+	ld	(ix - 3), a
+	jr	z, .Lhalf_next_row
+
+.Lhalf_pair_setup:
+	ld	a, (ix - 3)
+	ld	c, a
+	srl	a
+	ld	b, a
+	jr	z, .Lhalf_tail
+.Lhalf_pair_loop:
+	ld	a, (iy)
+	inc	iy
+	ld	(hl), a
+	inc	hl
+	ld	(hl), a
+	inc	hl
+	djnz	.Lhalf_pair_loop
+.Lhalf_tail:
+	bit	0, c
+	jr	z, .Lhalf_next_row
+	ld	a, (iy)
+	ld	(hl), a
+
+.Lhalf_next_row:
+	/* Advance the logical destination by its runtime width (80 or 40). */
+	ld	hl, (ix - 12)
+	ld	de, 0
+	ld	a, (_active_render_width)
+	ld	e, a
+	add	hl, de
+	ld	(ix - 12), hl
+
+	/* Two logical rows share one half-resolution source row. */
+	ld	a, (ix - 1)
+	and	a, 1
+	jr	z, .Lhalf_source_ready
+	ld	hl, (ix - 15)
+	ld	de, 40
+	add	hl, de
+	ld	(ix - 15), hl
+.Lhalf_source_ready:
+	ld	a, (ix - 1)
+	inc	a
+	ld	(ix - 1), a
+	ld	c, a
+	ld	a, (ix - 2)
+	cp	a, c
+	jp	nc, .Lhalf_row
+	ld	sp, ix
+	pop	ix
+	ret
+
+	.size	_composite_portal_lod_half_80, .-_composite_portal_lod_half_80

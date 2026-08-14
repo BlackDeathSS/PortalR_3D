@@ -1,12 +1,142 @@
 # Movable-body performance report
 
+## Build 0x26081309: clipping repair and honest dual-portal stress test
+
+The reported missing cube faces were a real scan-conversion regression, not a
+lighting illusion. `DrawPolygon` scratch records are reused from one face to
+the next. During the build 07 rollback, the per-face `top_vertex = 0` seed was
+removed with an experimental quad helper, while the generic bounds routine
+only changed `top_vertex` when a later vertex was higher than point zero. A
+face whose first point was already highest could therefore inherit another
+face's start vertex. The two-chain rasterizer then walked the wrong edges,
+which explains the direction-dependent missing, partial, and concave faces.
+
+Build 09 initializes `top_vertex` inside the shared polygon-bounds routine, so
+every room, portal, and cube polygon receives a valid scan start. It also uses
+a conservative two-half-extent near-plane bound; one half extent is not enough
+for a cube viewed obliquely. Five held-cube angles and seven close floor-cube
+angles now pass, and all twelve decoded captures retain complete convex cube
+silhouettes. The complete 33-check cube, held/throw, push, stand, portal-push,
+and noclip set also passes after semantic inspection of its new timing variants.
+
+The former `portal-four` benchmark did not represent the reported load. It put
+the cubes in room 1 and showed only one root aperture, so its 17.19 FPS low is
+not used for the two-portal claim. The new `dual-portal-four` profile keeps two
+separate wall apertures and all four root-room cubes visible throughout an
+854-frame moving route.
+
+| Dual-portal/four-cube path | Average | 1% low | Mean frame |
+|---|---:|---:|---:|
+| First honest baseline | 14.58 FPS | 12.02 FPS | 68.60 ms |
+| Specialized half-resolution compositor | 14.77 FPS | 12.16 FPS | 67.70 ms |
+| Shared identical destination render | 16.09 FPS | 12.98 FPS | 62.15 ms |
+
+The final path is 10.38% faster on average, raises the 1% low by 8.03%, and
+reduces mean frame time by 9.40% relative to the first honest baseline. When
+both reduced-resolution portals transform to the exact same destination
+camera, the engine now renders that child room and its cubes once into scratch,
+then composites it through both original aperture masks. Exact camera, room,
+host-face, and LOD checks retain the old path for every non-equivalent view.
+All ten logical-frame, presented-frame, and simulation endpoint hashes match
+the unshared renderer.
+
+The corrected detailed trace attributes about 26.28 ms to root geometry and
+cube rasterization, 10.80 ms to the single shared portal destination, 9.52 ms
+to presentation, 8.79 ms to root fill, and 2.11 ms to portal composition. The
+remaining 12.98 FPS tail is therefore real; it is primarily the full-detail
+root-cube scan conversion plus presentation, not a hidden second portal render.
+Decoded artifacts are under
+`benchmark-results/resolution-26081309/80x60/dual-portal-four`.
+
+## Superseded build 0x26081308 lighting checkpoint
+
+Build `0x26081308` improved face separation by assigning three cube axes
+distinct shades, but it did not fix the underlying missing-face regression.
+The build 09 investigation above supersedes the earlier visual diagnosis.
+
+| Layout | `0x26081307` average | `0x26081308` average | Old 1% low | New 1% low |
+|---|---:|---:|---:|---:|
+| Four root cubes | 31.04 FPS | 30.99 FPS | 16.49 FPS | 16.47 FPS |
+| Four portal cubes | 28.30 FPS | 28.30 FPS | 17.19 FPS | 17.18 FPS |
+
+The differences were measurement noise. The then-accepted hashes did not catch
+the reused `top_vertex` state; build 09's decoded convex-face captures and
+updated checks supersede them. Historical captures remain in
+`benchmark-results/resolution-26081308/80x60`.
+
+## Current rollback checkpoint
+
+Build `0x26081307` is based on `0x26081303`, not on the experimental 04-06
+cube pipelines. It restores the exact 03 projection, clipping, generic convex
+face setup, and portal geometry. The only rendering changes are an opaque
+developer-noclip exterior shell and outward-normal cube lighting. Historical
+04-06 measurements below are retained for comparison, but those paths are no
+longer compiled into `T3D3DEV`.
+
+| Layout | `0x26081303` average | `0x26081307` average | Old 1% low | New 1% low |
+|---|---:|---:|---:|---:|
+| No bodies | 36.60 FPS | 36.98 FPS | 19.52 FPS | 19.74 FPS |
+| Four root cubes | 30.53 FPS | 31.04 FPS | 16.03 FPS | 16.49 FPS |
+| Four portal cubes | 27.51 FPS | 28.30 FPS | 16.92 FPS | 17.19 FPS |
+
+The certified root-four route's slowest frame is 64.12 ms (15.60 FPS); the
+portal-four route's slowest frame is 58.81 ms (17.00 FPS). No certified frame
+reaches the reported 11 FPS regression. Route fingerprint `0x90ABD6C8`, final
+simulation state `0x2567643B`, four portal crossings, and final logical and
+presented hashes remain exact. Captures are in
+`benchmark-results/resolution-26081307/80x60`.
+
+## Rejected 04-06 experiments
+
+Build `0x26081306` fixes the direct cube kernel's close-projection boundary and
+batches all camera-facing faces through one assembly invocation. The cube-wide
+routine returns a handled-face mask, so unusual slopes and very large close-up
+faces retain the generic clipping path independently. Developer exterior views
+now suppress interior body and portal passes behind the opaque room shell.
+
+| Layout | `0x26081305` average | `0x26081306` average | Old 1% low | New 1% low |
+|---|---:|---:|---:|---:|
+| No bodies | 37.19 FPS | 37.12 FPS | 19.76 FPS | 19.73 FPS |
+| Four root cubes | 32.82 FPS | 32.69 FPS | 17.20 FPS | 17.10 FPS |
+| Four portal cubes | 29.49 FPS | 29.47 FPS | 17.34 FPS | 17.30 FPS |
+
+The small regression is the measured cost of the close-face correctness guard;
+the selected resolution, eight-unit LOD, and portal work are unchanged. An
+exact whole-cube occlusion experiment was rejected after its overlap route fell
+from 32.07 to 30.58 FPS. It performed projection/containment work while floor-
+resting cubes still exposed their upper faces. Captures are in
+`benchmark-results/resolution-26081306/80x60`.
+
+Build `0x26081305` adds a dedicated assembly cube pipeline on top of the
+`0x26081304` geometry culling. Signed-axis cube corners are generated without
+the former inlined C path. Fully projected 80x60 root faces are gathered from
+the shared eight-vertex projection cache and scan-converted without generic
+polygon or pointer-heavy edge structures. The assembly routine owns bounds,
+edge validation/coefficient setup, two-chain traversal, top-left clipping,
+horizon shading, and span emission. Near-clipped, sub-pixel-slope, and extreme
+off-screen faces fall back before any pixels are written. The eight-unit
+full-detail LOD distance and portal resolution rules are unchanged.
+
+| Layout | `0x26081304` average | `0x26081305` average | Old 1% low | New 1% low |
+|---|---:|---:|---:|---:|
+| No bodies | 37.20 FPS | 37.19 FPS | 19.75 FPS | 19.76 FPS |
+| Four root cubes | 32.35 FPS | 32.82 FPS | 16.94 FPS | 17.20 FPS |
+| Four portal cubes | 28.51 FPS | 29.49 FPS | 17.17 FPS | 17.34 FPS |
+
+The no-body control is neutral. Root-four gains 1.44% overall and 1.56% at the
+1% low; its directly affected full-detail pitch sweep improves 6.91% (38.02 to
+35.57 ms). Portal-four gains 3.42% overall. All 854 simulation hashes remain
+exact. Stable held/thrown, push, stand, portal-push, and noclip framebuffer and
+state checkpoints are retained. Captures are in
+`benchmark-results/resolution-26081305/80x60`.
+
+## Previous geometry-culling pass
+
 Build `0x26081304` targets geometry before rasterization. Complete cube AABBs
 are rejected against a conservative camera-space frustum before any corners,
 projected vertices, clipped faces, or scanlines are produced. Unclipped
 full-detail cube faces use a fixed four-point setup, and the 20x15 far-portal
 state uses direct floor/ceiling depth bands plus its dominant forward wall.
-The half- and full-resolution portal states retain all room faces, and the
-eight-unit full-detail cube LOD distance is unchanged.
 
 | Layout | `0x26081303` average | `0x26081304` average | Old 1% low | New 1% low |
 |---|---:|---:|---:|---:|
@@ -84,7 +214,7 @@ groups, and unrolls the full 80x60 presenter used on cache cold starts. It does
 not change portal LOD thresholds, cube LOD, aperture coverage, resolution, or
 simulation cadence.
 
-The current micro-pass also caches the shared equal-size cube's camera-space
+That historical micro-pass also caches the shared equal-size cube's camera-space
 projected extent once per camera, removing repeated absolute-value sums from
 every body bound test. The final root-eight capture is 39.012 ms / 25.63 FPS
 average with a 13.63 FPS 1% low; state, logical-frame, and presented-frame

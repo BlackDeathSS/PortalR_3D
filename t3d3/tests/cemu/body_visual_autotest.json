@@ -47,19 +47,19 @@
       "description": "Projected held cube",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["AB073ECF", "6062CBA2", "8194C5BA", "97A5507A", "579D21ED", "29191284", "193B4A08", "4C7FE5CB"]
+      "expected_CRCs": ["AB073ECF", "6062CBA2", "8194C5BA", "97A5507A", "579D21ED", "29191284", "193B4A08", "4C7FE5CB", "518A93F7", "3A019F1D"]
     },
     "thrown_body": {
       "description": "Thrown cube after portal/room physics",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["375ED930", "7321D28D", "0B3E8E35", "7888E2D1", "2DDD8F6D", "56F57A01", "E8C1E0DB", "E96E993A", "3846D190", "2AFF850A"]
+      "expected_CRCs": ["375ED930", "7321D28D", "0B3E8E35", "7888E2D1", "2DDD8F6D", "56F57A01", "E8C1E0DB", "E96E993A", "3846D190", "2AFF850A", "AEF13F44", "297D75EE", "F28C5D1C", "9D8C3636"]
     },
     "body_state": {
       "description": "Padded T3D3 body storage at accepted renderer timing checkpoints",
       "start": "0xD052C6",
       "size": "0x1A8",
-      "expected_CRCs": ["F969C50E", "0D8050F3", "A269094B", "90842E7F", "D1224152", "A602C89B", "E0D6C4A1", "062747DC", "1FEA4CE6", "F673E1F7", "1C119D98", "188EDFA6", "F4CA0FB5"]
+      "expected_CRCs": ["F969C50E", "0D8050F3", "A269094B", "90842E7F", "D1224152", "A602C89B", "E0D6C4A1", "062747DC", "1FEA4CE6", "F673E1F7", "1C119D98", "188EDFA6", "F4CA0FB5", "C751D785", "7C833703", "16CD2C27", "214AA522", "E5F41738"]
     }
   }
 }

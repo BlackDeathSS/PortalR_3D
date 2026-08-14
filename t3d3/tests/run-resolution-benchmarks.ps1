@@ -1,6 +1,6 @@
 param(
     [int[]]$Resolutions = @(64, 80, 160),
-    [int[]]$BodyLayouts = @(0, 1, 2),
+    [int[]]$BodyLayouts = @(0, 1, 2, 3),
     [string]$CEmuAutotester = "C:\CEdev\bin\cemu-autotester.exe",
     [string]$Python = "C:\Users\refiorlk_admin\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe",
     [switch]$SkipHardwarePackaging
@@ -17,7 +17,12 @@ if ($engineHeader -notmatch 'TRUE3D_BUILD_VERSION\s+0x([0-9A-Fa-f]+)UL') {
     throw "Could not read TRUE3D_BUILD_VERSION from src/engine.h"
 }
 $resultRoot = Join-Path $t3d3Root "benchmark-results\resolution-$($Matches[1])"
-$layoutNames = @{0 = "no-body"; 1 = "root-four"; 2 = "portal-four"}
+$layoutNames = @{
+    0 = "no-body"
+    1 = "root-four"
+    2 = "portal-four"
+    3 = "dual-portal-four"
+}
 
 foreach ($resolution in $Resolutions) {
     if ($resolution -notin @(64, 80, 160)) {
@@ -26,7 +31,7 @@ foreach ($resolution in $Resolutions) {
     $height = [int]($resolution * 3 / 4)
     foreach ($layout in $BodyLayouts) {
         if (-not $layoutNames.ContainsKey($layout)) {
-            throw "Unsupported body layout $layout. Expected 0, 1, or 2."
+            throw "Unsupported body layout $layout. Expected 0, 1, 2, or 3."
         }
         $layoutName = $layoutNames[$layout]
         $outputDirectory = Join-Path $resultRoot "${resolution}x${height}\$layoutName"

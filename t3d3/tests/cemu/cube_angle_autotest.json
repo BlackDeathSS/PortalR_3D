@@ -1,0 +1,73 @@
+{
+  "rom": "C:/Users/refiorlk_admin/Documents/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/refiorlk_admin/Downloads/clibs.8xg",
+    "C:/Users/refiorlk_admin/Documents/PortalR_3D/t3d3/bin/T3D3DEV.8xp"
+  ],
+  "target": {
+    "name": "T3D3DEV",
+    "isASM": true
+  },
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|600",
+    "hold|math",
+    "delay|100",
+    "release|math",
+    "delay|300",
+    "hash|cube_00",
+    "hold|right",
+    "delay|125",
+    "release|right",
+    "delay|150",
+    "hash|cube_11",
+    "hold|right",
+    "delay|125",
+    "release|right",
+    "delay|150",
+    "hash|cube_22",
+    "hold|right",
+    "delay|125",
+    "release|right",
+    "delay|150",
+    "hash|cube_34",
+    "hold|right",
+    "delay|125",
+    "release|right",
+    "delay|150",
+    "hash|cube_45"
+  ],
+  "hashes": {
+    "cube_00": {
+      "description": "Centered held cube at zero degrees",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["3A019F1D"]
+    },
+    "cube_11": {
+      "description": "Centered held cube near eleven degrees",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["E88469A7"]
+    },
+    "cube_22": {
+      "description": "Centered held cube near twenty-two degrees",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["B7ECC599"]
+    },
+    "cube_34": {
+      "description": "Centered held cube near thirty-four degrees",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["0D8CA064", "07379D1B"]
+    },
+    "cube_45": {
+      "description": "Centered held cube near forty-five degrees",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["FF76D691"]
+    }
+  }
+}

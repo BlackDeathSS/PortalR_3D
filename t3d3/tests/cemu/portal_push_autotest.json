@@ -25,19 +25,19 @@
       "description": "Floor cube pushed from rest through a wall portal",
       "start": "vram_start",
       "size": "vram_8_size",
-      "expected_CRCs": ["61706677", "E57EDC39", "5E7D2FFD", "5951E107", "62A0D362", "3D5F41DE", "FF20F709", "6CA16319", "FDEDF625", "91A7D2CF"]
+      "expected_CRCs": ["61706677", "E57EDC39", "5E7D2FFD", "5951E107", "62A0D362", "3D5F41DE", "FF20F709", "6CA16319", "FDEDF625", "91A7D2CF", "CC186337"]
     },
     "pushed_portal_player": {
       "description": "Player remains in the source room after pushing",
-      "start": "0xD1026C",
+      "start": "0xD1036C",
       "size": "0x35",
-      "expected_CRCs": ["B2B2F7FE", "3853FD0B", "BFB203B1", "5ADD1726", "5E4EF5F8", "6B568993", "46980B7E", "036D3DED"]
+      "expected_CRCs": ["B2B2F7FE", "3853FD0B", "BFB203B1", "5ADD1726", "5E4EF5F8", "6B568993", "46980B7E", "036D3DED", "36754186"]
     },
     "pushed_portal_body": {
       "description": "Pushed body transferred to the destination room",
       "start": "0xD052C6",
       "size": "0x1A8",
-      "expected_CRCs": ["EF69834B", "0C109E69", "EC6F6E5C", "2BE1423C", "BEB25C4D", "CF0ED2DC"]
+      "expected_CRCs": ["EF69834B", "0C109E69", "EC6F6E5C", "2BE1423C", "BEB25C4D", "CF0ED2DC", "5DCB416F"]
     }
   }
 }

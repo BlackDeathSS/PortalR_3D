@@ -1,4 +1,4 @@
-# T3D3 status - build 0x26081304
+# T3D3 status - build 0x26081309
 
 ## Completed foundation
 
@@ -83,56 +83,88 @@
   pointer and removes per-row aperture lookups. The portal-clipped kernel now
   advances cached aperture and destination cursors rather than reconstructing
   all three addresses on every row.
-- Reject complete cube camera-space AABBs before vertex construction,
-  projection, clipping, and face rasterization. The shift-only frustum is a
-  conservative outer bound, so contributing cubes cannot be removed.
-- Use fixed-layout projection and quad setup for the common unclipped
-  full-detail cube path instead of generic variable-polygon bookkeeping.
-- Give the 20x15 far-portal state a deterministic principal-plane budget:
-  direct floor/ceiling bands plus the dominant forward wall. The 40x30 and
-  80x60 portal states retain complete room geometry.
+- Restored build 03's shared C cube transform, eight-vertex projector, near
+  clipper, and generic convex face setup after the 04-06 shortcuts regressed
+  close and oblique cubes.
+- Treat the developer-noclip exterior room shell as opaque. Portals, the
+  fullscreen portal shortcut, and bodies no longer draw over exterior walls.
+- Shade cube faces from their transformed outward world normal. Room faces
+  continue using inward normals; portal-transformed cube bases remain lit in
+  world orientation.
+- Give the top, world-Y walls, and world-X walls distinct bright, medium, and
+  dark cube shades. Adjacent projected faces no longer visually merge at close
+  or oblique angles.
+- Fix the actual direction-dependent cube face loss by initializing every
+  reused polygon's `top_vertex` before generic two-chain scan conversion.
+- Use a conservative oblique-cube near-plane bound so a whole body cannot be
+  rejected while one or more corners still cross the visible near plane.
+- Add an honest `dual-portal-four` benchmark with both wall portals and all
+  four root-room cubes visible during the complete route.
+- Specialize 40x30-to-80x60 portal composition in assembly. When both reduced
+  portals map to the exact same destination camera, render the destination
+  once and composite it through both exact aperture masks.
 
 ## Validation
 
-The final 80x60 854-frame route retains deterministic state:
+The new supplied-ROM dual-portal/four-cube stress route measures 16.09 FPS
+average, 12.98 FPS 1% low, and 62.15 ms mean frame time. The first honest
+baseline measured 14.58 / 12.02 FPS and 68.60 ms. The retained optimizations
+therefore improve average FPS by 10.38%, the low by 8.03%, and mean frame time
+by 9.40%. All ten simulation, logical-frame, and presented-frame endpoint
+hashes match the unshared renderer. Final hashes are logical `0xD5BBF829`,
+presented `0xEDE265BA`, and route state `0xA11D4677`.
+
+Five held-cube direction checks and seven near-clipped floor-cube direction
+checks pass on the supplied ROM. Their decoded captures show complete convex
+faces at every sampled angle. These are the focused regression tests for the
+build 09 rendering bug.
+
+The established compatibility route retains deterministic state:
 
 - Route fingerprint: `0x90ABD6C8`
 - Exact simulation-state hashes by section
 - Portal crossings: 4 at the same frames
-- Nine of ten logical/presented section hashes remain exact; the far-quarter
-  portal section changes intentionally under its 20x15 principal-plane budget
+- Final logical frame: `0xE0C1779F`
+- Final presented frame: `0x82D46383`
+- Final route state: `0x2567643B`
 
-Supplied-ROM CEmu 80x60 no-body result for build `0x26081304`:
+Historical supplied-ROM CEmu 80x60 body results for build `0x26081308`:
 
-- Average: 37.20 FPS
-- Median: 39.34 FPS
-- 1% low: 19.75 FPS
-- Mean frame: 26.88 ms
+| Layout | Average | 1% low | Mean frame |
+|---|---:|---:|---:|
+| No bodies | 36.98 FPS | 19.74 FPS | 27.04 ms |
+| Four root cubes | 30.99 FPS | 16.47 FPS | 32.27 ms |
+| Four portal cubes | 28.30 FPS | 17.18 FPS | 35.34 ms |
 
-Seventeen focused body checks pass on the supplied ROM: five held/thrown/portal
-render-and-state checks, six push-and-wall-block checks, and three standing
-support checks, plus three floor-aligned portal-push checks. The wall trace ends
-with the cube exactly at the room boundary,
-the player exactly one combined radius away, and both horizontal velocities
-zero. Thrown and continuously pushed cubes finish in room 1 with the expected
-portal-derived signed-axis basis.
+Build 09 keeps build 07's rollback of the 04-06 speculative paths to
+restore the last fully correct cube renderer. Relative to archived build 03,
+the standard routes remain within normal measurement variance. Resolution, the
+eight-unit LOD, portal recursion, clipping, and physics are unchanged.
+
+All 33 focused checks pass on the supplied ROM: twelve cube direction/near-
+clip checks, five held/thrown checks, six player-push checks, three standing
+support checks, three floor-aligned portal-push checks, and four noclip checks.
+New wall-clock variants were accepted only after decoding their images and
+player/body records: thrown and pushed bodies reach the intended rooms,
+standing leaves the player grounded at the cube-top height, and the exterior
+noclip frame contains no portal or body leakage.
 
 Four additional noclip checks confirm that the camera can move beyond the room
 boundary with room 0 retained and `noclip=1`, then clamps back to the exact
 9.75-unit player boundary after noclip is disabled.
 
-The repeatable outside-room route now measures 148.3 FPS looking away, 148.0
-FPS while the room is fully outside the frustum, and 89.1 FPS with the exterior
-partially visible. Before the exterior-face and final hierarchical-presenter
-pass, those captures measured 128.0, 140.0, and 78.2 FPS respectively.
+The latest exterior capture shows no portal or body pixels over the room shell.
+Its sampled HUD rates are 117.4 FPS looking away, 145.6 FPS at the frustum
+edge, and 103.7 FPS with a partial exterior face visible. The values are live
+HUD samples rather than the 854-frame certification statistic.
 
 Normal-build memory budget:
 
-- Resident program: 59,975 bytes
-- BSS: 45,019 bytes
+- Resident program: 60,866 bytes
+- BSS: 45,275 bytes
 - Reserved stack: 4,096 bytes
-- Total: 109,090 / 153,600 bytes
-- Remaining: 44,510 bytes
+- Total: 110,237 / 153,600 bytes
+- Remaining: 43,363 bytes
 
 These are emulator measurements, not real-calculator certification.
 
@@ -161,19 +193,19 @@ four-box cap and removes the density-based 3-unit LOD cutoff:
 
 Against the original `0x26081102` eight-body baselines, the historical 64x48
 reference gained 81.1% in the root layout and 145.5% in the portal-destination
-layout. The current 80x60 development mode clears 25 FPS on average in both
-four-box layouts. Root-four now measures 32.35 FPS average / 16.94 FPS 1% low;
-portal-four measures 28.51 FPS average / 17.17 FPS 1% low. Root-four gains
-5.98% average and 5.66% at the 1% low over `0x26081303`. Resolution and the
-eight-unit cube LOD remain unchanged; only the smallest 20x15 portal state
-applies the documented principal-plane budget.
+layout. The current 80x60 development mode clears 25 FPS on average in the
+older single-aperture four-box layouts. Build 08 measured 30.99 FPS average /
+16.47 FPS 1% low for root-four and 28.30 / 17.18 for portal-four. Those
+profiles do not represent two apertures plus four cubes. Build 09's honest
+combined stress profile measures 16.09 / 12.98. Resolution and the eight-unit
+cube LOD remain unchanged; every portal LOD state uses complete room geometry.
 Detailed artifacts and methodology are in
 [BODY_PERFORMANCE.md](BODY_PERFORMANCE.md).
 
 Resolution scaling results are documented in
 [RESOLUTION_PERFORMANCE.md](RESOLUTION_PERFORMANCE.md). With the accepted
 assembly scan/composite and frame-consistency passes, four-cube averages are
-now 28.51-32.35 FPS at 80x60. Every retained 80x60 capture has the same route
+now 28.30-30.99 FPS at 80x60. Every retained 80x60 capture has the same route
 fingerprint, crossings, and per-frame simulation hashes.
 
 ## Next stage
@@ -182,8 +214,9 @@ fingerprint, crossings, and per-frame simulation hashes.
 2. Benchmark an affine assembly texture span without changing projection or
    polygon coverage.
 3. Add offline texture subdivision and mip/material records to `T3D3LVL` v2.
-4. Target the remaining portal-geometry spikes and update/render interaction
-   cost so the four-body 1% low approaches the 25 FPS contract.
+4. Add a pixel-exact assembly scan-conversion path for fully projectable root
+   cube quads, then target the remaining 4x presentation cost. These are the
+   two largest measured parts of the dual-portal tail.
 5. Add authored body spawns and repeat the full four-body test on hardware.
 
 Textures, arbitrary detail meshlets, and a new assembly texture rasterizer are
