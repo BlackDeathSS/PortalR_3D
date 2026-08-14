@@ -13,6 +13,20 @@ The compatibility-first successor based on the working True3D engine is in
 [`t3d3`](t3d3/README.md). T3D3 is developed alongside the original engines;
 it does not replace or modify them.
 
+## All-in-one level editor
+
+[`editor`](editor/README.md) is the shared multi-level studio for Portal3D and
+T3D3. It edits both engines' level formats, embeds all authored levels in the
+calculator programs, runs both CEdev builds, and creates transfer-ready ZIP
+packages. Start it from PowerShell with:
+
+```powershell
+.\editor\start-editor.ps1
+```
+
+Both games now open with a packaged-level selector. Use Up/Down and `2nd` to
+start a level, or `Clear` to exit.
+
 ## Full 3D Special Controls
 
 `Trace` (`F4`) toggles noclip so the camera can leave the room bounds.

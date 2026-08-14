@@ -1,41 +1,5 @@
 #include "level.h"
 
-typedef struct __attribute__((packed)) {
-    True3DLevelHeader header;
-    True3DRoomRecord rooms[2];
-} BuiltinTrue3DLevel;
-
-static const BuiltinTrue3DLevel builtin_level = {
-    {
-        {'T', '3', 'D', '1'},
-        TRUE3D_LEVEL_VERSION,
-        2,
-        0,
-        3,
-        0,
-        2 * 256,
-        384,
-        {
-            {0, 3, 0, 10 * 256, 640},
-            {1, 1, 12 * 256, 4 * 256, 5 * 256}
-        }
-    },
-    {
-        {
-            -4 * 256, 4 * 256,
-            0 * 256, 10 * 256,
-            0 * 256, 5 * 256,
-            {2, 3, 5, 4, 5, 5}
-        },
-        {
-            8 * 256, 16 * 256,
-            0 * 256, 8 * 256,
-            0 * 256, 5 * 256,
-            {6, 7, 9, 8, 9, 9}
-        }
-    }
-};
-
 static uint8_t bind_level(True3DLevelView *view, const void *data, size_t size) {
     const True3DLevelHeader *header = data;
     const True3DRoomRecord *rooms;
@@ -114,11 +78,24 @@ uint8_t true3d_level_open(True3DLevelView *view, True3DLevelSource *source) {
         }
         ti_Close(handle);
     }
-    return bind_level(view, &builtin_level, sizeof(builtin_level));
+    return true3d_level_builtin_view(view);
 }
 
 uint8_t true3d_level_builtin_view(True3DLevelView *view) {
-    return bind_level(view, &builtin_level, sizeof(builtin_level));
+    return true3d_level_embedded_view(0u, view);
+}
+
+uint8_t true3d_level_embedded_view(uint8_t index, True3DLevelView *view) {
+    const T3D3EmbeddedLevel *level;
+
+    if (index >= t3d3_embedded_level_count) return 0;
+    level = &t3d3_embedded_levels[index];
+    return bind_level(view, level->data, level->size);
+}
+
+const char *true3d_level_embedded_name(uint8_t index) {
+    return index < t3d3_embedded_level_count ?
+        t3d3_embedded_levels[index].name : "";
 }
 
 void true3d_level_close(True3DLevelSource *source) {

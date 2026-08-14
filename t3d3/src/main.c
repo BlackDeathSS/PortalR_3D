@@ -24,6 +24,72 @@ static EngineState engine;
 static True3DLevelView level;
 static True3DLevelSource level_source;
 
+static const char *catalog_level_name(uint8_t index, uint8_t has_external) {
+    if (has_external && index == 0u) return "External T3D3LVL";
+    return true3d_level_embedded_name((uint8_t)(index - has_external));
+}
+
+static void draw_level_menu(uint8_t selected, uint8_t has_external) {
+    uint8_t count = (uint8_t)(t3d3_embedded_level_count + has_external);
+    uint8_t first = selected >= 7u ? (uint8_t)(selected - 6u) : 0u;
+    uint8_t index;
+
+    gfx_FillScreen(0);
+    gfx_SetTextFGColor(12);
+    gfx_SetTextBGColor(0);
+    gfx_SetTextTransparentColor(0);
+    gfx_SetTextScale(2, 2);
+    gfx_PrintStringXY("T3D3", 12, 12);
+    gfx_SetTextScale(1, 1);
+    gfx_SetTextFGColor(10);
+    gfx_PrintStringXY("CHOOSE A LEVEL", 14, 38);
+    for (index = first; index < count && index < first + 7u; ++index) {
+        uint8_t y = (uint8_t)(60u + (index - first) * 22u);
+        if (index == selected) {
+            gfx_SetColor(4);
+            gfx_FillRectangle_NoClip(10, (uint8_t)(y - 5u), 300, 18);
+            gfx_SetTextFGColor(12);
+            gfx_PrintStringXY(">", 16, y);
+        } else {
+            gfx_SetTextFGColor(10);
+        }
+        gfx_PrintStringXY(catalog_level_name(index, has_external), 30, y);
+    }
+    gfx_SetTextFGColor(12);
+    gfx_PrintStringXY("UP/DOWN: SELECT   2ND: PLAY   CLEAR: EXIT", 12, 222);
+    gfx_SwapDraw();
+}
+
+static uint8_t select_level(uint8_t has_external) {
+    uint8_t count = (uint8_t)(t3d3_embedded_level_count + has_external);
+    uint8_t selected = 0;
+    uint8_t previous = 0;
+
+    draw_level_menu(selected, has_external);
+    for (;;) {
+        uint8_t keys;
+        kb_Scan();
+        keys = (uint8_t)(
+            ((kb_Data[7] & kb_Up) != 0 ? 1u : 0u) |
+            ((kb_Data[7] & kb_Down) != 0 ? 2u : 0u) |
+            ((kb_Data[1] & kb_2nd) != 0 ? 4u : 0u) |
+            ((kb_Data[6] & kb_Clear) != 0 ? 8u : 0u)
+        );
+        if ((keys & 1u) != 0 && (previous & 1u) == 0) {
+            selected = selected == 0u ? (uint8_t)(count - 1u) :
+                (uint8_t)(selected - 1u);
+            draw_level_menu(selected, has_external);
+        }
+        if ((keys & 2u) != 0 && (previous & 2u) == 0) {
+            selected = (uint8_t)((selected + 1u) % count);
+            draw_level_menu(selected, has_external);
+        }
+        if ((keys & 4u) != 0 && (previous & 4u) == 0) return selected;
+        if ((keys & 8u) != 0) return 0xFFu;
+        previous = keys;
+    }
+}
+
 _Static_assert(
     sizeof(EngineState) + 4096u < 150u * 1024u,
     "Player state plus reserved CEdev stack exceeds 150 KiB"
@@ -37,14 +103,33 @@ int main(void) {
     uint16_t fps_tenths = 0;
     uint8_t previous_trace = 0;
     uint8_t pending_toggles = 0;
+    uint8_t has_external;
+    uint8_t selected_level;
 
-    if (!true3d_level_open(&level, &level_source) || !engine_init(&engine, &level)) {
-        true3d_level_close(&level_source);
-        return 1;
-    }
+    if (!true3d_level_open(&level, &level_source)) return 1;
+    has_external = level_source.external;
     gfx_Begin();
     gfx_SetDrawBuffer();
     engine_graphics_init();
+    selected_level = select_level(has_external);
+    if (selected_level == 0xFFu) {
+        gfx_End();
+        true3d_level_close(&level_source);
+        return 0;
+    }
+    if (!has_external || selected_level != 0u) {
+        true3d_level_close(&level_source);
+        if (!true3d_level_embedded_view(
+                (uint8_t)(selected_level - has_external), &level)) {
+            gfx_End();
+            return 1;
+        }
+    }
+    if (!engine_init(&engine, &level)) {
+        gfx_End();
+        true3d_level_close(&level_source);
+        return 1;
+    }
     {
         clock_t started = clock();
 

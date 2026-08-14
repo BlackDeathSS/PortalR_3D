@@ -31,6 +31,29 @@ typedef struct {
     uint8_t x;
     uint8_t y;
     uint8_t direction;
+    uint8_t target_x;
+    uint8_t target_y;
+    uint8_t target_direction;
+} PortalLink;
+
+typedef struct {
+    const char *name;
+    const uint8_t *wall_map;
+    const uint8_t *portal_by_tile;
+    const PortalLink *portals;
+    uint16_t spawn_x;
+    uint16_t spawn_y;
+    uint16_t spawn_angle;
+    uint8_t portal_count;
+} Portal3DLevelDefinition;
+
+extern const Portal3DLevelDefinition portal3d_levels[];
+extern const uint8_t portal3d_level_count;
+
+typedef struct {
+    uint8_t x;
+    uint8_t y;
+    uint8_t direction;
     uint8_t valid;
 } Portal;
 
@@ -97,6 +120,8 @@ typedef struct {
 _Static_assert(sizeof(GameState) <= 32u, "GameState exceeded its RAM budget");
 
 void game_init(GameState *game);
+uint8_t game_level_select(uint8_t index);
+const char *game_level_name(uint8_t index);
 void game_graphics_init(void);
 uint8_t game_update(
     GameState *game,

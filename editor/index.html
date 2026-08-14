@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PortalR 3D Studio</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">PR</span>
+      <div><p>TI-84 PLUS CE TOOLCHAIN</p><h1>PortalR 3D Studio</h1></div>
+    </div>
+    <div class="toolbar">
+      <button id="new-project">New</button>
+      <label class="button" for="import-project">Open project</label>
+      <input id="import-project" type="file" accept=".json" hidden>
+      <button id="save-project">Save project</button>
+      <span class="divider"></span>
+      <button class="build" data-build="portal3d">Build Portal3D</button>
+      <button class="build" data-build="t3d3">Build T3D3</button>
+      <button class="primary build" data-build="both">Build both</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="rail">
+      <div class="engine-switch" role="tablist">
+        <button id="engine-portal3d" class="active" data-engine="portal3d">Portal3D</button>
+        <button id="engine-t3d3" data-engine="t3d3">T3D3</button>
+      </div>
+      <div class="rail-heading"><span>Packaged levels</span><button id="add-level" title="Add level">+</button></div>
+      <div id="level-list" class="level-list"></div>
+      <div class="rail-actions">
+        <button id="duplicate-level">Duplicate</button>
+        <button id="delete-level" class="danger">Delete</button>
+      </div>
+      <div class="project-note">
+        <strong>Embedded packages</strong>
+        <span>Every level listed here is compiled into the selected game and appears in its startup menu.</span>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <section class="viewport-card">
+        <div class="panel-heading">
+          <div><span id="engine-kicker">RAYCASTER · 15×15</span><strong id="level-title">Test chambers</strong></div>
+          <div id="stats" class="stats"></div>
+        </div>
+        <canvas id="editor-canvas" width="960" height="680"></canvas>
+        <div id="canvas-help" class="canvas-help"></div>
+      </section>
+      <aside id="inspector" class="inspector"></aside>
+    </main>
+  </div>
+
+  <section id="build-drawer" class="build-drawer">
+    <div><strong id="build-title">Build console</strong><span id="build-status">Ready</span></div>
+    <a id="package-link" class="package-link" hidden>Download package</a>
+    <pre id="build-log">Use a build button to generate level sources, compile with CEdev, and create a transfer-ready ZIP.</pre>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

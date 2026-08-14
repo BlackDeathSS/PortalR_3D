@@ -37,6 +37,65 @@ int main(void) {
 
 static GameState game;
 
+static void draw_level_menu(uint8_t selected) {
+    uint8_t first = selected >= 7u ? (uint8_t)(selected - 6u) : 0u;
+    uint8_t index;
+
+    gfx_FillScreen(0);
+    gfx_SetTextFGColor(15);
+    gfx_SetTextBGColor(0);
+    gfx_SetTextTransparentColor(0);
+    gfx_SetTextScale(2, 2);
+    gfx_PrintStringXY("PORTAL3D", 12, 12);
+    gfx_SetTextScale(1, 1);
+    gfx_SetTextFGColor(12);
+    gfx_PrintStringXY("CHOOSE A LEVEL", 14, 38);
+    for (index = first; index < portal3d_level_count && index < first + 7u; ++index) {
+        uint8_t y = (uint8_t)(60u + (index - first) * 22u);
+        if (index == selected) {
+            gfx_SetColor(4);
+            gfx_FillRectangle_NoClip(10, (uint8_t)(y - 5u), 300, 18);
+            gfx_SetTextFGColor(15);
+            gfx_PrintStringXY(">", 16, y);
+        } else {
+            gfx_SetTextFGColor(12);
+        }
+        gfx_PrintStringXY(game_level_name(index), 30, y);
+    }
+    gfx_SetTextFGColor(8);
+    gfx_PrintStringXY("UP/DOWN: SELECT   2ND: PLAY   CLEAR: EXIT", 12, 222);
+    gfx_SwapDraw();
+}
+
+static uint8_t select_level(void) {
+    uint8_t selected = 0;
+    uint8_t previous = 0;
+
+    draw_level_menu(selected);
+    for (;;) {
+        uint8_t keys;
+        kb_Scan();
+        keys = (uint8_t)(
+            ((kb_Data[7] & kb_Up) != 0 ? 1u : 0u) |
+            ((kb_Data[7] & kb_Down) != 0 ? 2u : 0u) |
+            ((kb_Data[1] & kb_2nd) != 0 ? 4u : 0u) |
+            ((kb_Data[6] & kb_Clear) != 0 ? 8u : 0u)
+        );
+        if ((keys & 1u) != 0 && (previous & 1u) == 0) {
+            selected = selected == 0u ? (uint8_t)(portal3d_level_count - 1u) :
+                (uint8_t)(selected - 1u);
+            draw_level_menu(selected);
+        }
+        if ((keys & 2u) != 0 && (previous & 2u) == 0) {
+            selected = (uint8_t)((selected + 1u) % portal3d_level_count);
+            draw_level_menu(selected);
+        }
+        if ((keys & 4u) != 0 && (previous & 4u) == 0) return selected;
+        if ((keys & 8u) != 0) return 0xFFu;
+        previous = keys;
+    }
+}
+
 #if RENDER_PROFILE
 static uint24_t ticks_to_milliseconds(clock_t ticks) {
     return (uint24_t)((ticks * 1000UL) / CLOCKS_PER_SEC);
@@ -185,9 +244,15 @@ int main(void) {
 #if !RENDER_PROFILE
     uint8_t f5_was_down = 0;
 #endif
+    uint8_t selected_level;
 
     gfx_Begin();
     gfx_SetDrawBuffer();
+    selected_level = select_level();
+    if (selected_level == 0xFFu || !game_level_select(selected_level)) {
+        gfx_End();
+        return selected_level == 0xFFu ? 0 : 1;
+    }
     game_graphics_init();
     game_init(&game);
 

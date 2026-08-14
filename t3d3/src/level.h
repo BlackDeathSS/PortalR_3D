@@ -53,12 +53,23 @@ typedef struct {
     uint8_t external;
 } True3DLevelSource;
 
+typedef struct {
+    const char *name;
+    const void *data;
+    size_t size;
+} T3D3EmbeddedLevel;
+
+extern const T3D3EmbeddedLevel t3d3_embedded_levels[];
+extern const uint8_t t3d3_embedded_level_count;
+
 _Static_assert(sizeof(True3DPortalSpawn) == 8u, "Portal spawn layout changed");
 _Static_assert(sizeof(True3DLevelHeader) == 30u, "True3D header layout changed");
 _Static_assert(sizeof(True3DRoomRecord) == 18u, "Room record layout changed");
 
 uint8_t true3d_level_open(True3DLevelView *view, True3DLevelSource *source);
 uint8_t true3d_level_builtin_view(True3DLevelView *view);
+uint8_t true3d_level_embedded_view(uint8_t index, True3DLevelView *view);
+const char *true3d_level_embedded_name(uint8_t index);
 void true3d_level_close(True3DLevelSource *source);
 
 #endif

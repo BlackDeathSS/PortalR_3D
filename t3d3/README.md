@@ -99,6 +99,12 @@ The calculator program is `T3D3DEV`. T3D3 first looks for `T3D3LVL`; if it is
 not present or is invalid, it accepts the legacy `T3DLVL1` AppVar and finally
 falls back to the built-in two-room chamber.
 
+T3D3 also supports multiple editor-built levels embedded directly in the
+program. Its startup selector lists a valid external AppVar first when one is
+present, followed by every embedded level. Use Up/Down and `2nd` to choose, or
+`Clear` to exit. The shared [`PortalR 3D Studio`](../editor/README.md) edits the
+levels and can build/package T3D3 and Portal3D together.
+
 Controls are initially identical to True3D:
 
 - arrows: walk and turn

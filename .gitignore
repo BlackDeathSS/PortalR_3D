@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 true3d2/tests/cemu/failure_*_dump.bin
 t3d3/tests/cemu/failure_*_dump.bin
+editor/build/

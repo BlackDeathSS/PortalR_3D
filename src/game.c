@@ -134,15 +134,6 @@ enum ColorIndex {
     COLOR_TEXTURE_BASE = 18
 };
 
-typedef struct {
-    uint8_t x;
-    uint8_t y;
-    uint8_t direction;
-    uint8_t target_x;
-    uint8_t target_y;
-    uint8_t target_direction;
-} PortalLink;
-
 #if RENDER_ASM_PORTALS
 extern uint8_t render_asm_find_portal(
     const GameState *game,
@@ -759,7 +750,7 @@ _Static_assert(
 );
 
 /* A padded 16-by-16 map makes every DDA lookup a shift and an indexed load. */
-const uint8_t render_wall_map[16 * 16] = {
+uint8_t render_wall_map[16 * 16] = {
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
     1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
@@ -779,7 +770,7 @@ const uint8_t render_wall_map[16 * 16] = {
 };
 
 /* Link index + 1, keyed by the padded map tile. */
-const uint8_t render_builtin_portal_by_tile[16 * 16] = {
+uint8_t render_builtin_portal_by_tile[16 * 16] = {
     [3] = 10, [5] = 5, [7] = 6, [32] = 9, [64] = 3,
     [94] = 7, [110] = 8, [149] = 4, [208] = 1, [213] = 2
 };
@@ -824,7 +815,7 @@ const uint16_t render_reciprocal_delta[426] = {
     156, 155, 155, 154, 154, 154
 };
 
-const PortalLink render_builtin_portals[10] = {
+PortalLink render_builtin_portals[10] = {
     {0, 13, DIR_SOUTH, 5, 13, DIR_NORTH},
     {5, 13, DIR_NORTH, 0, 13, DIR_SOUTH},
     {0, 4, DIR_SOUTH, 5, 9, DIR_NORTH},
@@ -836,6 +827,37 @@ const PortalLink render_builtin_portals[10] = {
     {0, 2, DIR_SOUTH, 3, 0, DIR_EAST},
     {3, 0, DIR_EAST, 0, 2, DIR_SOUTH}
 };
+
+static uint16_t active_spawn_x = FIXED_ONE + FIXED_ONE / 2;
+static uint16_t active_spawn_y = FIXED_ONE * 2 + FIXED_ONE / 2;
+static uint16_t active_spawn_angle = 32u << ANGLE_FRACTION_BITS;
+static uint8_t render_builtin_portal_count = 10u;
+static uint8_t active_level_selected;
+
+uint8_t game_level_select(uint8_t index) {
+    const Portal3DLevelDefinition *level;
+
+    if (index >= portal3d_level_count) return 0;
+    level = &portal3d_levels[index];
+    if (level->wall_map == NULL || level->portal_by_tile == NULL ||
+        level->portals == NULL || level->portal_count > 10u) return 0;
+    memcpy(render_wall_map, level->wall_map, sizeof(render_wall_map));
+    memcpy(render_builtin_portal_by_tile, level->portal_by_tile,
+        sizeof(render_builtin_portal_by_tile));
+    memset(render_builtin_portals, 0, sizeof(render_builtin_portals));
+    memcpy(render_builtin_portals, level->portals,
+        (size_t)level->portal_count * sizeof(PortalLink));
+    render_builtin_portal_count = level->portal_count;
+    active_spawn_x = level->spawn_x;
+    active_spawn_y = level->spawn_y;
+    active_spawn_angle = level->spawn_angle;
+    active_level_selected = 1u;
+    return 1;
+}
+
+const char *game_level_name(uint8_t index) {
+    return index < portal3d_level_count ? portal3d_levels[index].name : "";
+}
 
 /* Same packed rotation/mirror encoding as the assembly compatibility path. */
 static const uint8_t render_portal_transform_flags[16] = {
@@ -912,7 +934,7 @@ static inline __attribute__((always_inline)) uint8_t render_portal_face_value(
 static uint8_t render_builtin_face_value(uint16_t face) {
     uint8_t portal_id;
 
-    for (portal_id = 0; portal_id < 10u; ++portal_id) {
+    for (portal_id = 0; portal_id < render_builtin_portal_count; ++portal_id) {
         const PortalLink *link = &render_builtin_portals[portal_id];
 
         if (render_portal_face_index(
@@ -933,7 +955,7 @@ static void render_portal_tables_init_builtin(void) {
     render_primary_face = RENDER_PORTAL_FACE_INVALID;
     render_secondary_face = RENDER_PORTAL_FACE_INVALID;
 
-    for (portal_id = 0; portal_id < 10u; ++portal_id) {
+    for (portal_id = 0; portal_id < render_builtin_portal_count; ++portal_id) {
         const PortalLink *link = &render_builtin_portals[portal_id];
 
         render_portal_transform_plan_init(
@@ -2849,9 +2871,10 @@ static void render_column(
 }
 
 void game_init(GameState *game) {
-    game->player_x = FIXED_ONE + FIXED_ONE / 2;
-    game->player_y = FIXED_ONE * 2 + FIXED_ONE / 2;
-    game->angle = 32u << ANGLE_FRACTION_BITS;
+    if (!active_level_selected) game_level_select(0u);
+    game->player_x = active_spawn_x;
+    game->player_y = active_spawn_y;
+    game->angle = active_spawn_angle;
     game->primary.valid = 0;
     game->secondary.valid = 0;
     game->previous_buttons = 0;
@@ -2869,6 +2892,7 @@ void game_graphics_init(void) {
     uint8_t boundary;
     uint8_t shade;
     uint8_t texture_column[WALL_TEXTURE_HEIGHT];
+    if (!active_level_selected) game_level_select(0u);
     static const uint8_t shade_offsets[WALL_SHADE_LEVELS] = {0, 8, 16, 24};
     static const uint8_t wall_palette_rgb
         [WALL_TEXTURE_COUNT][WALL_BASE_COLOR_COUNT][3] = {
