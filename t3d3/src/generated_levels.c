@@ -3,14 +3,13 @@
 
 typedef struct __attribute__((packed)) {
     True3DLevelHeader header;
-    True3DRoomRecord rooms[2];
+    True3DRoomRecord rooms[1];
 } GeneratedT3D3Level0;
 
 static const GeneratedT3D3Level0 generated_level_0 = {
-    {{'T','3','D','1'}, TRUE3D_LEVEL_VERSION, 2, 0, 3, 0,512,384, {{0,3,0,2560,640},{1,1,3072,1024,1280}}},
+    {{'T','3','D','1'}, TRUE3D_LEVEL_VERSION, 1, 0, 3, 0,512,384, {{0,0,0,512,0},{0,1,0,512,1280}}},
     {
-        {-1024,1024,0,2560,0,1280,{2,3,5,4,5,5}},
-        {2048,4096,0,2048,0,1280,{6,7,9,8,9,9}}
+        {-1024,1024,0,2560,0,1280,{2,3,5,4,5,5}}
     }
 };
 
@@ -20,15 +19,28 @@ typedef struct __attribute__((packed)) {
 } GeneratedT3D3Level1;
 
 static const GeneratedT3D3Level1 generated_level_1 = {
+    {{'T','3','D','1'}, TRUE3D_LEVEL_VERSION, 1, 0, 0, -3840,3840,384, {{0,3,0,2560,640},{0,2,0,0,640}}},
+    {
+        {-7680,0,0,7680,0,7680,{2,3,5,4,5,5}}
+    }
+};
+
+typedef struct __attribute__((packed)) {
+    True3DLevelHeader header;
+    True3DRoomRecord rooms[1];
+} GeneratedT3D3Level2;
+
+static const GeneratedT3D3Level2 generated_level_2 = {
     {{'T','3','D','1'}, TRUE3D_LEVEL_VERSION, 1, 0, 0, 0,512,384, {{0,3,0,2560,640},{0,2,0,0,640}}},
     {
-        {-1024,1024,0,2560,0,1280,{2,3,5,4,5,5}}
+        {-2560,2560,0,5120,0,2560,{2,3,5,4,5,5}}
     }
 };
 
 const T3D3EmbeddedLevel t3d3_embedded_levels[] = {
     {"Wall to ceiling", &generated_level_0, sizeof(generated_level_0)},
-    {"Single chamber", &generated_level_1, sizeof(generated_level_1)}
+    {"Big Room", &generated_level_1, sizeof(generated_level_1)},
+    {"Medium Room", &generated_level_2, sizeof(generated_level_2)}
 };
 
 const uint8_t t3d3_embedded_level_count =
