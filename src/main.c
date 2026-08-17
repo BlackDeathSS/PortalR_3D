@@ -253,6 +253,9 @@ int main(void) {
         gfx_End();
         return selected_level == 0xFFu ? 0 : 1;
     }
+#if !RENDER_PROFILE
+    fps_overlay_enabled = portal3d_always_show_fps;
+#endif
     game_graphics_init();
     game_init(&game);
 
@@ -280,11 +283,15 @@ int main(void) {
         if ((kb_Data[1] & kb_2nd) != 0) buttons |= PORTAL_BUTTON_PRIMARY;
         if ((kb_Data[2] & kb_Alpha) != 0) buttons |= PORTAL_BUTTON_SECONDARY;
         if ((kb_Data[1] & kb_Del) != 0) buttons |= PORTAL_BUTTON_CLEAR;
+        if ((kb_Data[1] & kb_Mode) != 0) buttons |= GAME_BUTTON_FIRE;
+        if ((kb_Data[2] & kb_Math) != 0) buttons |= GAME_BUTTON_USE;
+        if ((kb_Data[3] & kb_1) != 0) buttons |= GAME_BUTTON_WEAPON_1;
+        if ((kb_Data[4] & kb_2) != 0) buttons |= GAME_BUTTON_WEAPON_2;
 
 #if !RENDER_PROFILE
         /* F5 is the rightmost top-row GRAPH key. */
         f5_is_down = (uint8_t)((kb_Data[1] & kb_Graph) != 0);
-        if (f5_is_down && !f5_was_down) {
+        if (!portal3d_always_show_fps && f5_is_down && !f5_was_down) {
             fps_overlay_toggle();
             redraw = 1;
         }

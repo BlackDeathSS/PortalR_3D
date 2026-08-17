@@ -1,0 +1,34 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/t3d3/bin/T3D3DEV.8xp"
+  ],
+  "target": {
+    "name": "T3D3DEV",
+    "isASM": true
+  },
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|500",
+    "key|2nd",
+    "delay|250",
+    "hash|flung_momentum",
+    "hash|flung_velocity_y"
+  ],
+  "hashes": {
+    "flung_momentum": {
+      "description": "Portal momentum remains active after later updates",
+      "start": "0xD103A1",
+      "size": "1",
+      "expected_CRCs": ["A016D052"]
+    },
+    "flung_velocity_y": {
+      "description": "Converted fall speed is still horizontal",
+      "start": "0xD10378",
+      "size": "3",
+      "expected_CRCs": ["B9B717DD"]
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/t3d3/bin/T3D3DEV.8xp"
+  ],
+  "target": {"name": "T3D3DEV", "isASM": true},
+  "delay_after_key": 100,
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|700",
+    "key|down",
+    "key|2nd",
+    "delay|700",
+    "hash|big_room",
+    "hash|palette"
+  ],
+  "hashes": {
+    "big_room": {
+      "description": "Big Room with depth cues",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["00000000"]
+    },
+    "palette": {
+      "description": "T3D3 palette",
+      "start": "lcdPalette",
+      "size": "lcdPalette_size",
+      "expected_CRCs": ["00000000"]
+    }
+  }
+}

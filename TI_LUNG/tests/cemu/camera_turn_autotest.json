@@ -1,0 +1,44 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/TI_LUNG/bin/TILUNG.8xp"
+  ],
+  "target": {"name": "TILUNG", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|450",
+    "hold|2nd",
+    "delay|120",
+    "release|2nd",
+    "delay|1600",
+    "hold|right",
+    "delay|4200",
+    "release|right",
+    "delay|400",
+    "hash|cabin_after_full_turn",
+    "hash|view_after_full_turn",
+    "hash|yaw_after_full_turn"
+  ],
+  "hashes": {
+    "cabin_after_full_turn": {
+      "description": "World-space camera station survives a complete turn",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["A9B9BC22"]
+    },
+    "view_after_full_turn": {
+      "description": "A complete cabin turn remains in the game",
+      "start": "0xD1085A",
+      "size": "1",
+      "expected_CRCs": ["527D5351"]
+    },
+    "yaw_after_full_turn": {
+      "description": "Camera yaw changes while the station remains stable",
+      "start": "0xD1089F",
+      "size": "1",
+      "expected_CRCs": ["8E98540D"]
+    }
+  }
+}

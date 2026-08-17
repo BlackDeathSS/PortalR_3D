@@ -1,0 +1,24 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/t3d3/bin/T3D3LVAT.8xp.0.8xv",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/t3d3/bin/T3D3LVAT.8xp.1.8xv",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/t3d3/bin/T3D3LVAT.8xp"
+  ],
+  "target": {"name": "T3D3LVAT", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|300000",
+    "hash|result"
+  ],
+  "hashes": {
+    "result": {
+      "description": "Intentional full-RAM dump after depth-cue baseline",
+      "start": "ram_start",
+      "size": "ram_size",
+      "expected_CRCs": ["00000000"]
+    }
+  }
+}

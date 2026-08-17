@@ -42,3 +42,18 @@ start a level, or `Clear` to exit.
 - `Del`: clear portals
 - `Graph` (`F5`): toggle the release FPS counter
 - `Clear`: exit
+
+## Raycaster gameplay controls
+
+- `Mode`: fire the equipped weapon
+- `Math`: open a nearby door
+- `1` / `2`: equip the pistol / shotgun
+- Arrow keys: move and turn
+- `2nd` / `Alpha`: place primary / secondary portals
+- `Del`: clear both placed portals
+
+Each raycaster chamber now contains enemies, pickups, animated security doors,
+and a boss-gated exit. Defeat the boss (or bosses), then walk into the green
+exit beacon to advance. The HUD tracks health, ammunition, lives, weapon, and
+level. If all lives are lost—or the last chamber is cleared—press `Mode` to
+restart the campaign.

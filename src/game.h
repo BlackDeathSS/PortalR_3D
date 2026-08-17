@@ -16,14 +16,20 @@
 #define PORTAL_BUTTON_PRIMARY  (1u << 0)
 #define PORTAL_BUTTON_SECONDARY (1u << 1)
 #define PORTAL_BUTTON_CLEAR    (1u << 2)
+#define GAME_BUTTON_FIRE       (1u << 3)
+#define GAME_BUTTON_USE        (1u << 4)
+#define GAME_BUTTON_WEAPON_1   (1u << 5)
+#define GAME_BUTTON_WEAPON_2   (1u << 6)
 
 #define GAME_RENDER_LOGICAL_COLUMNS 80
 #define GAME_RENDER_COLUMN_WIDTH 4
 #define GAME_RENDER_TEXTURE_WIDTH 16
 #define GAME_RENDER_TEXTURE_HEIGHT 8
 #define GAME_RENDER_MAX_PORTAL_DEPTH 6
+#define GAME_BUILTIN_PORTAL_PAIR_CAPACITY 10
+#define GAME_BUILTIN_PORTAL_CAPACITY (GAME_BUILTIN_PORTAL_PAIR_CAPACITY * 2)
 /* Stable YYMMDD/revision ID shared by every benchmark program variant. */
-#define GAME_BUILD_VERSION 0x26081403UL
+#define GAME_BUILD_VERSION 0x26081501UL
 
 typedef int24_t fixed_t;
 
@@ -37,6 +43,31 @@ typedef struct {
 } PortalLink;
 
 typedef struct {
+    uint8_t x;
+    uint8_t y;
+    uint8_t kind;
+} GameplaySpawn;
+
+typedef struct {
+    uint8_t x;
+    uint8_t y;
+    uint8_t orientation;
+} DoorSpawn;
+
+enum GameplayEnemyKind {
+    GAME_ENEMY_TURRET = 0,
+    GAME_ENEMY_HUNTER = 1,
+    GAME_ENEMY_BOSS = 2
+};
+
+enum GameplayPickupKind {
+    GAME_PICKUP_AMMO = 0,
+    GAME_PICKUP_HEALTH = 1,
+    GAME_PICKUP_SHELLS = 2,
+    GAME_PICKUP_LIFE = 3
+};
+
+typedef struct {
     const char *name;
     const uint8_t *wall_map;
     const uint8_t *portal_by_tile;
@@ -45,10 +76,20 @@ typedef struct {
     uint16_t spawn_y;
     uint16_t spawn_angle;
     uint8_t portal_count;
+    const GameplaySpawn *enemies;
+    const GameplaySpawn *pickups;
+    const DoorSpawn *doors;
+    uint8_t enemy_count;
+    uint8_t pickup_count;
+    uint8_t door_count;
+    uint8_t exit_x;
+    uint8_t exit_y;
 } Portal3DLevelDefinition;
 
 extern const Portal3DLevelDefinition portal3d_levels[];
 extern const uint8_t portal3d_level_count;
+extern const uint8_t portal3d_render_max_depth;
+extern const uint8_t portal3d_always_show_fps;
 
 typedef struct {
     uint8_t x;
@@ -64,6 +105,15 @@ typedef struct {
     Portal primary;
     Portal secondary;
     uint8_t previous_buttons;
+    uint8_t health;
+    uint8_t ammo;
+    uint8_t shells;
+    uint8_t lives;
+    uint8_t weapon;
+    uint8_t current_level;
+    uint8_t kills;
+    uint8_t game_over;
+    uint8_t recoil;
 } GameState;
 
 #if RENDER_PROFILE
@@ -117,7 +167,7 @@ typedef struct {
 } GameRenderBenchmark;
 #endif
 
-_Static_assert(sizeof(GameState) <= 32u, "GameState exceeded its RAM budget");
+_Static_assert(sizeof(GameState) <= 48u, "GameState exceeded its RAM budget");
 
 void game_init(GameState *game);
 uint8_t game_level_select(uint8_t index);

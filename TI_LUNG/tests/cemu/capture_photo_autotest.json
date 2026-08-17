@@ -1,0 +1,49 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/TI_LUNG/bin/TILUNG.8xp"
+  ],
+  "target": {"name": "TILUNG", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|450",
+    "hold|2nd",
+    "delay|120",
+    "release|2nd",
+    "delay|1500",
+    "hold|right",
+    "delay|1600",
+    "release|right",
+    "delay|300",
+    "hold|2nd",
+    "delay|120",
+    "release|2nd",
+    "delay|900",
+    "delay|500",
+    "hash|photo_ready",
+    "hash|photo_view",
+    "hash|photo_count"
+  ],
+  "hashes": {
+    "photo_ready": {
+      "description": "Photo is ready for visual capture",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["98A4B6C6"]
+    },
+    "photo_view": {
+      "description": "camera still view state",
+      "start": "0xD1085A",
+      "size": "1",
+      "expected_CRCs": ["412DA0A5"]
+    },
+    "photo_count": {
+      "description": "camera exposure count",
+      "start": "0xD10852",
+      "size": "2",
+      "expected_CRCs": ["E2C3EFA5"]
+    }
+  }
+}

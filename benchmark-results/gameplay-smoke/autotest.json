@@ -1,0 +1,37 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/bin/PORTAL3D.8xp"
+  ],
+  "target": {"name": "PORTAL3D", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|800",
+    "key|2nd",
+    "delay|800",
+    "key|2nd",
+    "delay|250",
+    "key|alpha",
+    "delay|250",
+    "key|mode",
+    "delay|250",
+    "hold|up",
+    "delay|700",
+    "release|up",
+    "hold|right",
+    "delay|350",
+    "release|right",
+    "key|mode",
+    "delay|600",
+    "hash|buffer0",
+    "hash|buffer1",
+    "hash|palette"
+  ],
+  "hashes": {
+    "buffer0": {"description": "Gameplay front buffer", "start": "0xD40000", "size": 76800, "expected_CRCs": ["E9BA40F5"]},
+    "buffer1": {"description": "Gameplay back buffer", "start": "0xD52C00", "size": 76800, "expected_CRCs": ["C6B56798"]},
+    "palette": {"description": "Gameplay palette", "start": "0xE30200", "size": 512, "expected_CRCs": ["CCC5C4E4"]}
+  }
+}

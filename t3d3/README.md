@@ -10,6 +10,21 @@ the texture rasterizer, improved portal kernels, higher-detail geometry, and
 movable-body system can be introduced independently and rejected if they break
 perspective, collision, portal placement, or performance.
 
+Build `0x26081502` adds bounded large-room depth cues. Root-room floors and
+ceilings show up to two four-unit world-grid depth seams, while room walls cap
+their existing palette light at 8-, 16-, and 24-unit distance thresholds.
+Deterministic no-body, four-body, and dual-portal routes regress by 2.25%,
+1.93%, and 4.59% respectively, all within the 5% acceptance limit. See
+[docs/DEPTH_CUES.md](docs/DEPTH_CUES.md) for captures and retained reports.
+
+Build `0x26081503` preserves player fling momentum through a floor/ceiling-to-
+wall portal. The complete velocity vector was already rotated correctly at the
+crossing, but the following update replaced its new horizontal components with
+ordinary walking input. Portal-created horizontal speed now remains active
+until horizontal collision stops it, matching the cube traversal behavior. A
+calculator regression fixture verifies the momentum state and converted
+horizontal velocity after later update frames.
+
 The first T3D3 extension is active: a four-slot translation-only box pool
 supports gravity, room collision, sleeping, simple body/body response,
 pickup/drop/throw, projected box rendering in root and portal views, and portal

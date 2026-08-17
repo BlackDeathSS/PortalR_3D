@@ -16,6 +16,10 @@
 	.equ DIR_SOUTH, 1
 	.equ DIR_WEST, 2
 	.equ DIR_EAST, 3
+	.equ PORTAL_BUILTIN, 3
+	/* Mirrored by GAME_BUILTIN_PORTAL_CAPACITY and static assertions in game.c. */
+	.equ DYNAMIC_PRIMARY_PORTAL_ID, 20
+	.equ DYNAMIC_SECONDARY_PORTAL_ID, 21
 	.equ STATE_ORIGIN_X, 0
 	.equ STATE_ORIGIN_Y, 3
 	.equ STATE_RAY_X, 6
@@ -583,7 +587,7 @@ _render_asm_cast_wall_continue:
 	or a, a
 	ret z
 
-	/* bits 0-1: kind, bit 2: linked, bits 3-6: portal ID. */
+	/* bits 0-1: kind, bit 2: linked, bits 3-7: portal ID. */
 	ld c, a
 	and a, 3
 	ld (_render_ray_state + STATE_PORTAL_KIND), a
@@ -596,7 +600,7 @@ _render_asm_cast_wall_continue:
 	rrca
 	rrca
 	rrca
-	and a, 15
+	and a, 31
 	ld (_render_ray_state + STATE_PORTAL_ID), a
 	ld hl, 0
 	ld l, a
@@ -1984,7 +1988,7 @@ _render_asm_find_portal:
 	ld a, (iy + 15)
 	ld (hl), a
 	ld hl, (ix + 24)
-	ld (hl), 10
+	ld (hl), DYNAMIC_PRIMARY_PORTAL_ID
 	jp .Lportal_found
 
 	/* Secondary entry: it exits through the active primary portal. */
@@ -2018,26 +2022,39 @@ _render_asm_find_portal:
 	ld a, (iy + 11)
 	ld (hl), a
 	ld hl, (ix + 24)
-	ld (hl), 11
+	ld (hl), DYNAMIC_SECONDARY_PORTAL_ID
 	jr .Lportal_found
 
-	/* Built-ins are a one-byte tile lookup followed by one six-byte record. */
+	/* A direction-major face descriptor selects the exact six-byte record. */
 .Lportal_try_builtin:
-	ld hl, 0
-	ld l, (ix + 12)
-	add hl, hl
-	add hl, hl
-	add hl, hl
-	add hl, hl
+	ld a, (ix + 15)
+	ld b, a
+	ld a, (ix + 12)
+	add a, a
+	add a, a
+	add a, a
+	add a, a
+	add a, (ix + 9)
+	ld c, a
+	ld hl, _render_portal_faces
 	ld de, 0
-	ld e, (ix + 9)
-	add hl, de
-	ld de, _render_builtin_portal_by_tile
+	ld d, b
+	ld e, c
 	add hl, de
 	ld a, (hl)
 	or a, a
 	jr z, .Lportal_not_linked
-	dec a
+	ld c, a
+	and a, 3
+	cp a, PORTAL_BUILTIN
+	jr nz, .Lportal_not_linked
+	bit 2, c
+	jr z, .Lportal_not_linked
+	ld a, c
+	rrca
+	rrca
+	rrca
+	and a, 31
 	ld b, a
 	ld de, 0
 	ld d, 6
@@ -2047,10 +2064,6 @@ _render_asm_find_portal:
 	add hl, de
 	inc hl
 	inc hl
-	ld a, (hl)
-	ld c, (ix + 15)
-	cp a, c
-	jr nz, .Lportal_not_linked
 	inc hl
 	ld iy, (ix + 18)
 	ld a, (hl)
@@ -4015,7 +4028,6 @@ _render_portal_bottom_start:
 	.extern _render_wall_texture_runs
 	.extern _render_wall_colors
 	.extern _render_wall_prepacked_runs
-	.extern _render_builtin_portal_by_tile
 	.extern _render_builtin_portals
 	.extern _render_portal_faces
 	.extern _render_portal_transform_plans

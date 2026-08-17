@@ -97,6 +97,13 @@
 #define ANGLE_FRACTION_BITS 8
 #define ANGLE_WRAP (ANGLE_STEPS << ANGLE_FRACTION_BITS)
 #define ANGLE_MASK (ANGLE_WRAP - 1)
+#define GAME_MAX_ENEMIES 8
+#define GAME_MAX_PICKUPS 8
+#define GAME_MAX_DOORS 4
+#define GAME_DOOR_OPEN_TIME 192u
+#define GAME_INTERACT_DISTANCE 384
+#define GAME_ENEMY_WAKE_DISTANCE (FIXED_ONE * 8)
+#define GAME_EXIT_DISTANCE 160
 
 enum Direction {
     DIR_NORTH = 0,
@@ -131,8 +138,70 @@ enum ColorIndex {
     COLOR_BUILTIN = 15,
     COLOR_CEILING = 16,
     COLOR_CEILING_NEAR = 17,
-    COLOR_TEXTURE_BASE = 18
+    COLOR_TEXTURE_BASE = 18,
+    COLOR_GAME_RED = 146,
+    COLOR_GAME_RED_DARK,
+    COLOR_GAME_GREEN,
+    COLOR_GAME_YELLOW,
+    COLOR_GAME_CYAN,
+    COLOR_GAME_WHITE,
+    COLOR_GAME_GRAY,
+    COLOR_GAME_DARK,
+    COLOR_GAME_ORANGE,
+    COLOR_GAME_PURPLE
 };
+
+enum GameplaySpriteKind {
+    SPRITE_TURRET = 0,
+    SPRITE_HUNTER,
+    SPRITE_BOSS,
+    SPRITE_AMMO,
+    SPRITE_HEALTH,
+    SPRITE_SHELLS,
+    SPRITE_LIFE,
+    SPRITE_DOOR,
+    SPRITE_EXIT,
+    SPRITE_PLAYER
+};
+
+typedef struct {
+    fixed_t x;
+    fixed_t y;
+    uint16_t cooldown;
+    uint8_t health;
+    uint8_t kind;
+    uint8_t active;
+    uint8_t hurt;
+} GameplayEnemy;
+
+typedef struct {
+    fixed_t x;
+    fixed_t y;
+    uint8_t kind;
+    uint8_t active;
+} GameplayPickup;
+
+typedef struct {
+    fixed_t x;
+    fixed_t y;
+    uint16_t progress;
+    uint8_t orientation;
+    uint8_t opening;
+} GameplayDoor;
+
+typedef struct {
+    GameplayEnemy enemies[GAME_MAX_ENEMIES];
+    GameplayPickup pickups[GAME_MAX_PICKUPS];
+    GameplayDoor doors[GAME_MAX_DOORS];
+    fixed_t exit_x;
+    fixed_t exit_y;
+    uint8_t enemy_count;
+    uint8_t pickup_count;
+    uint8_t door_count;
+    uint8_t exit_open;
+    uint8_t message;
+    uint16_t message_time;
+} GameplayRuntime;
 
 #if RENDER_ASM_PORTALS
 extern uint8_t render_asm_find_portal(
@@ -171,7 +240,10 @@ typedef struct __attribute__((packed)) {
     uint8_t tangent_to_x;
 } PortalTransformPlan;
 
-#define RENDER_PORTAL_PLAN_COUNT 12u
+#define BUILTIN_PORTAL_CAPACITY GAME_BUILTIN_PORTAL_CAPACITY
+#define DYNAMIC_PRIMARY_PORTAL_ID BUILTIN_PORTAL_CAPACITY
+#define DYNAMIC_SECONDARY_PORTAL_ID (BUILTIN_PORTAL_CAPACITY + 1u)
+#define RENDER_PORTAL_PLAN_COUNT (BUILTIN_PORTAL_CAPACITY + 2u)
 #define RENDER_PORTAL_FACE_COUNT (4u * 256u)
 #define RENDER_PORTAL_FACE_INVALID 0xFFFFu
 #define RENDER_PORTAL_FACE_LINKED 0x04u
@@ -355,6 +427,11 @@ typedef struct {
 } ScreenRow;
 
 static RenderScratch render_scratch;
+static fixed_t render_column_depth[LOGICAL_COLUMNS];
+static fixed_t render_first_portal_depth[LOGICAL_COLUMNS];
+static uint8_t render_first_portal_kind[LOGICAL_COLUMNS];
+static uint8_t render_first_portal_top[LOGICAL_COLUMNS];
+static uint8_t render_first_portal_bottom[LOGICAL_COLUMNS];
 #if RENDER_PROFILE
 static GameRenderProfile render_profile;
 #endif
@@ -658,6 +735,10 @@ _Static_assert(offsetof(WallContext, center) == 7u,
 _Static_assert(sizeof(RayHit) == 14u, "Assembly RayHit layout changed");
 _Static_assert(sizeof(PortalTransformPlan) == 8u,
     "Assembly portal transform-plan layout changed");
+_Static_assert(BUILTIN_PORTAL_CAPACITY == 20u,
+    "Update render_asm.s portal IDs when changing built-in capacity");
+_Static_assert(DYNAMIC_SECONDARY_PORTAL_ID < 32u,
+    "Portal face descriptors have five ID bits");
 _Static_assert(sizeof(RayDDAState) == 58u,
     "Assembly RayDDAState layout changed");
 _Static_assert(offsetof(RayDDAState, origin_y) == 3u,
@@ -769,7 +850,7 @@ uint8_t render_wall_map[16 * 16] = {
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
 };
 
-/* Link index + 1, keyed by the padded map tile. */
+/* Nonzero when at least one built-in portal face occupies the map tile. */
 uint8_t render_builtin_portal_by_tile[16 * 16] = {
     [3] = 10, [5] = 5, [7] = 6, [32] = 9, [64] = 3,
     [94] = 7, [110] = 8, [149] = 4, [208] = 1, [213] = 2
@@ -815,7 +896,7 @@ const uint16_t render_reciprocal_delta[426] = {
     156, 155, 155, 154, 154, 154
 };
 
-PortalLink render_builtin_portals[10] = {
+PortalLink render_builtin_portals[BUILTIN_PORTAL_CAPACITY] = {
     {0, 13, DIR_SOUTH, 5, 13, DIR_NORTH},
     {5, 13, DIR_NORTH, 0, 13, DIR_SOUTH},
     {0, 4, DIR_SOUTH, 5, 9, DIR_NORTH},
@@ -833,6 +914,8 @@ static uint16_t active_spawn_y = FIXED_ONE * 2 + FIXED_ONE / 2;
 static uint16_t active_spawn_angle = 32u << ANGLE_FRACTION_BITS;
 static uint8_t render_builtin_portal_count = 10u;
 static uint8_t active_level_selected;
+static uint8_t active_level_index;
+static GameplayRuntime gameplay;
 
 uint8_t game_level_select(uint8_t index) {
     const Portal3DLevelDefinition *level;
@@ -840,7 +923,8 @@ uint8_t game_level_select(uint8_t index) {
     if (index >= portal3d_level_count) return 0;
     level = &portal3d_levels[index];
     if (level->wall_map == NULL || level->portal_by_tile == NULL ||
-        level->portals == NULL || level->portal_count > 10u) return 0;
+        level->portals == NULL ||
+        level->portal_count > BUILTIN_PORTAL_CAPACITY) return 0;
     memcpy(render_wall_map, level->wall_map, sizeof(render_wall_map));
     memcpy(render_builtin_portal_by_tile, level->portal_by_tile,
         sizeof(render_builtin_portal_by_tile));
@@ -851,6 +935,7 @@ uint8_t game_level_select(uint8_t index) {
     active_spawn_x = level->spawn_x;
     active_spawn_y = level->spawn_y;
     active_spawn_angle = level->spawn_angle;
+    active_level_index = index;
     active_level_selected = 1u;
     return 1;
 }
@@ -1003,25 +1088,25 @@ static void render_portal_tables_prepare_dynamic(
     /* Secondary is patched first so primary retains the legacy precedence. */
     if (secondary_face != RENDER_PORTAL_FACE_INVALID) {
         render_portal_faces[secondary_face] = render_portal_face_value(
-            PORTAL_SECONDARY, 11, game->primary.valid
+            PORTAL_SECONDARY, DYNAMIC_SECONDARY_PORTAL_ID, game->primary.valid
         );
     }
     if (primary_face != RENDER_PORTAL_FACE_INVALID) {
         render_portal_faces[primary_face] = render_portal_face_value(
-            PORTAL_PRIMARY, 10, game->secondary.valid
+            PORTAL_PRIMARY, DYNAMIC_PRIMARY_PORTAL_ID, game->secondary.valid
         );
     }
 
     if (game->primary.valid && game->secondary.valid) {
         render_portal_transform_plan_init(
-            &render_portal_transform_plans[10],
+            &render_portal_transform_plans[DYNAMIC_PRIMARY_PORTAL_ID],
             game->primary.direction,
             game->secondary.x,
             game->secondary.y,
             game->secondary.direction
         );
         render_portal_transform_plan_init(
-            &render_portal_transform_plans[11],
+            &render_portal_transform_plans[DYNAMIC_SECONDARY_PORTAL_ID],
             game->secondary.direction,
             game->primary.x,
             game->primary.y,
@@ -1170,12 +1255,29 @@ static fixed_t delta_for_component(fixed_t component) {
     return render_reciprocal_delta[magnitude];
 }
 
+static uint8_t gameplay_door_blocks(int24_t x, int24_t y) {
+    uint8_t index;
+
+    for (index = 0; index < gameplay.door_count; ++index) {
+        const GameplayDoor *door = &gameplay.doors[index];
+
+        if (door->progress < 176u &&
+            door->x / FIXED_ONE == x && door->y / FIXED_ONE == y) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static inline __attribute__((always_inline)) uint8_t map_is_wall(int24_t x, int24_t y) {
     if ((uint24_t)x >= MAP_WIDTH || (uint24_t)y >= MAP_HEIGHT) {
         return 1;
     }
 
-    return render_wall_map[((uint16_t)y << 4) | (uint16_t)x];
+    return (uint8_t)(
+        render_wall_map[((uint16_t)y << 4) | (uint16_t)x] ||
+        gameplay_door_blocks(x, y)
+    );
 }
 
 #if RENDER_ASM_PORTALS
@@ -1194,11 +1296,17 @@ static inline __attribute__((always_inline)) uint8_t portal_find_exit(
 }
 #else
 static uint8_t builtin_portal_index(uint8_t x, uint8_t y, uint8_t direction) {
-    uint8_t value = render_builtin_portal_by_tile[((uint16_t)y << 4) | x];
+    uint8_t index;
 
-    if (value != 0 &&
-        render_builtin_portals[value - 1].direction == direction) {
-        return value;
+    if (render_builtin_portal_by_tile[((uint16_t)y << 4) | x] == 0) {
+        return 0;
+    }
+    for (index = 0; index < render_builtin_portal_count; ++index) {
+        const PortalLink *link = &render_builtin_portals[index];
+
+        if (link->x == x && link->y == y && link->direction == direction) {
+            return (uint8_t)(index + 1u);
+        }
     }
     return 0;
 }
@@ -1223,7 +1331,7 @@ static uint8_t portal_find_exit(
         *kind = PORTAL_PRIMARY;
         if (game->secondary.valid) {
             *exit = game->secondary;
-            *portal_id = 10;
+            *portal_id = DYNAMIC_PRIMARY_PORTAL_ID;
             return 1;
         }
         return 0;
@@ -1232,7 +1340,7 @@ static uint8_t portal_find_exit(
         *kind = PORTAL_SECONDARY;
         if (game->primary.valid) {
             *exit = game->primary;
-            *portal_id = 11;
+            *portal_id = DYNAMIC_SECONDARY_PORTAL_ID;
             return 1;
         }
         return 0;
@@ -2550,6 +2658,7 @@ static void render_column(
 #endif
     fixed_t distance_bias = 0;
     uint8_t visited_low = 0;
+    uint8_t visited_middle = 0;
     uint8_t visited_high = 0;
     uint8_t count = 0;
     uint8_t clip_start = 0;
@@ -2558,7 +2667,7 @@ static void render_column(
     uint8_t draw_clip_end = GFX_LCD_HEIGHT;
     RayHit *hit = &render_scratch.hit;
 
-    while (count < MAX_RENDER_PORTAL_DEPTH) {
+    while (count < portal3d_render_max_depth) {
 #if RENDER_ASM_RAYCAST
         const Portal *exit;
 #else
@@ -2697,6 +2806,14 @@ static void render_column(
         context = wall_context_for_distance(hit->distance);
         if (kind != PORTAL_NONE) {
             portal_opening(hit, context, &opening_start, &opening_end);
+            if (count == 0 && has_exit) {
+                uint8_t logical_column = (uint8_t)(x / COLUMN_WIDTH);
+
+                render_first_portal_depth[logical_column] = projected_distance;
+                render_first_portal_kind[logical_column] = kind;
+                render_first_portal_top[logical_column] = opening_start;
+                render_first_portal_bottom[logical_column] = opening_end;
+            }
         }
         ++count;
 
@@ -2806,18 +2923,20 @@ static void render_column(
         /* Preserve an open aperture at the recursion/visibility limit. */
         {
             uint8_t visit_mask = portal_visit_bits[portal_id & 7u];
-            uint8_t already_visited = portal_id < 8u ?
-                visited_low : visited_high;
+            uint8_t already_visited = portal_id < 8u ? visited_low :
+                (portal_id < 16u ? visited_middle : visited_high);
             uint8_t clip_height = (uint8_t)(clip_end - clip_start);
 
             if (clip_height < PORTAL_RECURSE_MIN_HEIGHT ||
-                count >= MAX_RENDER_PORTAL_DEPTH ||
+                count >= portal3d_render_max_depth ||
                 (already_visited & visit_mask) != 0) {
                 break;
             }
 
             if (portal_id < 8u) {
                 visited_low |= visit_mask;
+            } else if (portal_id < 16u) {
+                visited_middle |= visit_mask;
             } else {
                 visited_high |= visit_mask;
             }
@@ -2862,6 +2981,7 @@ static void render_column(
     }
 
     RENDER_BENCHMARK_SWITCH(GAME_RENDER_BENCH_ADMIN);
+    render_column_depth[x / COLUMN_WIDTH] = hit->distance;
 
 #if RENDER_PROFILE
     if (count > render_profile.max_depth) {
@@ -2870,14 +2990,379 @@ static void render_column(
 #endif
 }
 
-void game_init(GameState *game) {
-    if (!active_level_selected) game_level_select(0u);
+static int32_t gameplay_distance_squared(
+    fixed_t left_x,
+    fixed_t left_y,
+    fixed_t right_x,
+    fixed_t right_y
+) {
+    int32_t dx = (int32_t)left_x - right_x;
+    int32_t dy = (int32_t)left_y - right_y;
+
+    return dx * dx + dy * dy;
+}
+
+static uint8_t gameplay_line_clear(
+    fixed_t from_x,
+    fixed_t from_y,
+    fixed_t to_x,
+    fixed_t to_y
+) {
+    fixed_t dx = to_x - from_x;
+    fixed_t dy = to_y - from_y;
+    fixed_t span = fixed_abs(dx);
+    uint8_t steps;
+    uint8_t step;
+
+    if (fixed_abs(dy) > span) span = fixed_abs(dy);
+    steps = (uint8_t)(span / 64);
+    if (steps < 2u) return 1;
+    if (steps > 60u) steps = 60u;
+    for (step = 1u; step < steps; ++step) {
+        fixed_t x = from_x + (fixed_t)(((int32_t)dx * step) / steps);
+        fixed_t y = from_y + (fixed_t)(((int32_t)dy * step) / steps);
+
+        if (map_is_wall(x / FIXED_ONE, y / FIXED_ONE)) return 0;
+    }
+    return 1;
+}
+
+static void gameplay_runtime_init(void) {
+    const Portal3DLevelDefinition *level = &portal3d_levels[active_level_index];
+    uint8_t index;
+
+    memset(&gameplay, 0, sizeof(gameplay));
+    gameplay.enemy_count = level->enemy_count > GAME_MAX_ENEMIES ?
+        GAME_MAX_ENEMIES : level->enemy_count;
+    gameplay.pickup_count = level->pickup_count > GAME_MAX_PICKUPS ?
+        GAME_MAX_PICKUPS : level->pickup_count;
+    gameplay.door_count = level->door_count > GAME_MAX_DOORS ?
+        GAME_MAX_DOORS : level->door_count;
+    gameplay.exit_x = (fixed_t)level->exit_x * FIXED_ONE + FIXED_ONE / 2;
+    gameplay.exit_y = (fixed_t)level->exit_y * FIXED_ONE + FIXED_ONE / 2;
+
+    for (index = 0; index < gameplay.enemy_count; ++index) {
+        const GameplaySpawn *spawn = &level->enemies[index];
+        GameplayEnemy *enemy = &gameplay.enemies[index];
+
+        enemy->x = (fixed_t)spawn->x * FIXED_ONE + FIXED_ONE / 2;
+        enemy->y = (fixed_t)spawn->y * FIXED_ONE + FIXED_ONE / 2;
+        enemy->kind = spawn->kind;
+        enemy->health = spawn->kind == GAME_ENEMY_BOSS ? 240u :
+            (spawn->kind == GAME_ENEMY_HUNTER ? 80u : 55u);
+        enemy->active = 1u;
+        enemy->cooldown = (uint16_t)(80u + index * 31u);
+    }
+    for (index = 0; index < gameplay.pickup_count; ++index) {
+        const GameplaySpawn *spawn = &level->pickups[index];
+        GameplayPickup *pickup = &gameplay.pickups[index];
+
+        pickup->x = (fixed_t)spawn->x * FIXED_ONE + FIXED_ONE / 2;
+        pickup->y = (fixed_t)spawn->y * FIXED_ONE + FIXED_ONE / 2;
+        pickup->kind = spawn->kind;
+        pickup->active = 1u;
+    }
+    for (index = 0; index < gameplay.door_count; ++index) {
+        const DoorSpawn *spawn = &level->doors[index];
+        GameplayDoor *door = &gameplay.doors[index];
+
+        door->x = (fixed_t)spawn->x * FIXED_ONE + FIXED_ONE / 2;
+        door->y = (fixed_t)spawn->y * FIXED_ONE + FIXED_ONE / 2;
+        door->orientation = spawn->orientation;
+    }
+}
+
+static uint8_t gameplay_boss_alive(void) {
+    uint8_t index;
+
+    for (index = 0; index < gameplay.enemy_count; ++index) {
+        if (gameplay.enemies[index].active &&
+            gameplay.enemies[index].kind == GAME_ENEMY_BOSS) return 1;
+    }
+    return 0;
+}
+
+static void gameplay_reset_player(GameState *game) {
     game->player_x = active_spawn_x;
     game->player_y = active_spawn_y;
     game->angle = active_spawn_angle;
     game->primary.valid = 0;
     game->secondary.valid = 0;
     game->previous_buttons = 0;
+    game->health = 100u;
+    game->recoil = 0;
+}
+
+static void gameplay_take_damage(GameState *game, uint8_t amount) {
+    if (game->game_over) return;
+    if (amount >= game->health) {
+        if (game->lives > 1u) {
+            --game->lives;
+            gameplay_runtime_init();
+            gameplay_reset_player(game);
+            gameplay.message = 6u;
+            gameplay.message_time = 384u;
+        } else {
+            game->health = 0;
+            game->lives = 0;
+            game->game_over = 1u;
+        }
+    } else {
+        game->health = (uint8_t)(game->health - amount);
+        gameplay.message = 5u;
+        gameplay.message_time = 96u;
+    }
+}
+
+static void gameplay_fire(GameState *game) {
+    fixed_t dir_x;
+    fixed_t dir_y;
+    GameplayEnemy *target = NULL;
+    fixed_t best_depth = FIXED_INF;
+    uint8_t damage;
+    uint8_t index;
+
+    if (game->weapon == 0u) {
+        if (game->ammo == 0u) {
+            gameplay.message = 1u;
+            gameplay.message_time = 192u;
+            return;
+        }
+        --game->ammo;
+        damage = 38u;
+    } else {
+        if (game->shells == 0u) {
+            gameplay.message = 1u;
+            gameplay.message_time = 192u;
+            return;
+        }
+        --game->shells;
+        damage = 76u;
+    }
+    game->recoil = 5u;
+    direction_for_angle(game->angle, &dir_x, &dir_y);
+    memset(render_first_portal_kind, 0, sizeof(render_first_portal_kind));
+    for (index = 0; index < gameplay.enemy_count; ++index) {
+        GameplayEnemy *enemy = &gameplay.enemies[index];
+        fixed_t dx;
+        fixed_t dy;
+        fixed_t depth;
+        fixed_t side;
+        fixed_t tolerance;
+
+        if (!enemy->active) continue;
+        dx = enemy->x - game->player_x;
+        dy = enemy->y - game->player_y;
+        depth = (fixed_t)(((int32_t)dx * dir_x + (int32_t)dy * dir_y) / FIXED_ONE);
+        if (depth <= 0 || depth >= best_depth) continue;
+        side = (fixed_t)(((int32_t)dx * -dir_y + (int32_t)dy * dir_x) / FIXED_ONE);
+        tolerance = enemy->kind == GAME_ENEMY_BOSS ? 112 : 70;
+        if (fixed_abs(side) > tolerance ||
+            !gameplay_line_clear(game->player_x, game->player_y, enemy->x, enemy->y)) {
+            continue;
+        }
+        target = enemy;
+        best_depth = depth;
+    }
+    if (target != NULL) {
+        if (game->weapon == 1u && best_depth > FIXED_ONE * 5) damage = 38u;
+        if (damage >= target->health) {
+            target->health = 0;
+            target->active = 0;
+            ++game->kills;
+            gameplay.message = target->kind == GAME_ENEMY_BOSS ? 4u : 3u;
+            gameplay.message_time = target->kind == GAME_ENEMY_BOSS ? 512u : 160u;
+        } else {
+            target->health = (uint8_t)(target->health - damage);
+            target->hurt = 5u;
+            gameplay.message = 2u;
+            gameplay.message_time = 96u;
+        }
+    }
+}
+
+static void gameplay_use_door(GameState *game) {
+    int32_t best = (int32_t)GAME_INTERACT_DISTANCE * GAME_INTERACT_DISTANCE;
+    GameplayDoor *selected = NULL;
+    uint8_t index;
+
+    for (index = 0; index < gameplay.door_count; ++index) {
+        GameplayDoor *door = &gameplay.doors[index];
+        int32_t distance = gameplay_distance_squared(
+            game->player_x, game->player_y, door->x, door->y
+        );
+
+        if (distance < best && door->progress < 255u) {
+            best = distance;
+            selected = door;
+        }
+    }
+    if (selected != NULL) {
+        selected->opening = 1u;
+        gameplay.message = 7u;
+        gameplay.message_time = 128u;
+    }
+}
+
+static void gameplay_update_pickups(GameState *game) {
+    uint8_t index;
+
+    for (index = 0; index < gameplay.pickup_count; ++index) {
+        GameplayPickup *pickup = &gameplay.pickups[index];
+
+        if (!pickup->active || gameplay_distance_squared(
+                game->player_x, game->player_y, pickup->x, pickup->y
+            ) >= 90L * 90L) continue;
+        pickup->active = 0;
+        if (pickup->kind == GAME_PICKUP_AMMO) {
+            game->ammo = game->ammo > 84u ? 99u : (uint8_t)(game->ammo + 15u);
+        } else if (pickup->kind == GAME_PICKUP_HEALTH) {
+            game->health = game->health > 74u ? 100u : (uint8_t)(game->health + 25u);
+        } else if (pickup->kind == GAME_PICKUP_SHELLS) {
+            game->shells = game->shells > 21u ? 30u : (uint8_t)(game->shells + 8u);
+        } else if (game->lives < 9u) {
+            ++game->lives;
+        }
+        gameplay.message = 8u;
+        gameplay.message_time = 160u;
+    }
+}
+
+static void gameplay_update_enemies(GameState *game, uint16_t time_step) {
+    uint8_t index;
+
+    for (index = 0; index < gameplay.enemy_count; ++index) {
+        GameplayEnemy *enemy = &gameplay.enemies[index];
+        fixed_t dx;
+        fixed_t dy;
+        fixed_t distance;
+
+        if (!enemy->active) continue;
+        if (enemy->cooldown > time_step) enemy->cooldown -= time_step;
+        else enemy->cooldown = 0;
+        if (enemy->hurt) --enemy->hurt;
+        dx = game->player_x - enemy->x;
+        dy = game->player_y - enemy->y;
+        distance = fixed_abs(dx) + fixed_abs(dy);
+        if (distance > GAME_ENEMY_WAKE_DISTANCE ||
+            !gameplay_line_clear(enemy->x, enemy->y, game->player_x, game->player_y)) {
+            continue;
+        }
+
+        if (enemy->kind != GAME_ENEMY_TURRET && distance > 210) {
+            fixed_t divisor = distance == 0 ? 1 : distance;
+            fixed_t speed = enemy->kind == GAME_ENEMY_BOSS ? 86 : 122;
+            fixed_t step = (fixed_t)(((int32_t)speed * time_step) >> 8);
+            fixed_t move_x = (fixed_t)(((int32_t)dx * step) / divisor);
+            fixed_t move_y = (fixed_t)(((int32_t)dy * step) / divisor);
+            fixed_t candidate_x = enemy->x + move_x;
+            fixed_t candidate_y = enemy->y + move_y;
+
+            if (!map_is_wall(candidate_x / FIXED_ONE, enemy->y / FIXED_ONE)) {
+                enemy->x = candidate_x;
+            }
+            if (!map_is_wall(enemy->x / FIXED_ONE, candidate_y / FIXED_ONE)) {
+                enemy->y = candidate_y;
+            }
+        }
+        if (enemy->cooldown == 0u && distance < FIXED_ONE * 6) {
+            gameplay_take_damage(
+                game,
+                enemy->kind == GAME_ENEMY_BOSS ? 18u :
+                    (enemy->kind == GAME_ENEMY_HUNTER ? 10u : 7u)
+            );
+            enemy->cooldown = enemy->kind == GAME_ENEMY_BOSS ? 150u : 230u;
+        }
+    }
+}
+
+static void gameplay_restart_run(GameState *game) {
+    (void)game_level_select(0u);
+    game->ammo = 36u;
+    game->shells = 6u;
+    game->lives = 3u;
+    game->weapon = 0u;
+    game->kills = 0u;
+    game->current_level = 0u;
+    game->game_over = 0u;
+    gameplay_runtime_init();
+    gameplay_reset_player(game);
+}
+
+static void gameplay_advance_level(GameState *game) {
+    uint8_t next = (uint8_t)(active_level_index + 1u);
+
+    if (next >= portal3d_level_count) {
+        game->game_over = 2u;
+        return;
+    }
+    (void)game_level_select(next);
+    game->current_level = next;
+    if (game->health < 60u) game->health = 60u;
+    game->ammo = game->ammo > 89u ? 99u : (uint8_t)(game->ammo + 10u);
+    game->shells = game->shells > 25u ? 30u : (uint8_t)(game->shells + 4u);
+    gameplay_runtime_init();
+    gameplay_reset_player(game);
+    gameplay.message = 9u;
+    gameplay.message_time = 384u;
+}
+
+static uint8_t gameplay_update(
+    GameState *game,
+    uint8_t pressed,
+    uint24_t elapsed_ticks,
+    uint24_t ticks_per_second
+) {
+    uint16_t time_step = (uint16_t)(
+        ((uint32_t)elapsed_ticks << 8) / ticks_per_second
+    );
+    uint8_t index;
+
+    if (time_step == 0u) time_step = 1u;
+    if (game->game_over) {
+        if ((pressed & GAME_BUTTON_FIRE) != 0u) gameplay_restart_run(game);
+        return 1u;
+    }
+    if ((pressed & GAME_BUTTON_WEAPON_1) != 0u) game->weapon = 0u;
+    if ((pressed & GAME_BUTTON_WEAPON_2) != 0u) game->weapon = 1u;
+    if ((pressed & GAME_BUTTON_FIRE) != 0u) gameplay_fire(game);
+    if ((pressed & GAME_BUTTON_USE) != 0u) gameplay_use_door(game);
+
+    for (index = 0; index < gameplay.door_count; ++index) {
+        GameplayDoor *door = &gameplay.doors[index];
+        if (door->opening && door->progress < 255u) {
+            uint16_t next = (uint16_t)(door->progress + time_step * 2u);
+            door->progress = next > 255u ? 255u : next;
+        }
+    }
+    gameplay_update_pickups(game);
+    gameplay_update_enemies(game, time_step);
+    gameplay.exit_open = (uint8_t)!gameplay_boss_alive();
+    if (gameplay.exit_open && gameplay_distance_squared(
+            game->player_x, game->player_y, gameplay.exit_x, gameplay.exit_y
+        ) < (int32_t)GAME_EXIT_DISTANCE * GAME_EXIT_DISTANCE) {
+        gameplay_advance_level(game);
+    }
+    if (gameplay.message_time > time_step) gameplay.message_time -= time_step;
+    else {
+        gameplay.message_time = 0;
+        gameplay.message = 0;
+    }
+    if (game->recoil) --game->recoil;
+    return 1u;
+}
+
+void game_init(GameState *game) {
+    if (!active_level_selected) game_level_select(0u);
+    game->ammo = 36u;
+    game->shells = 6u;
+    game->lives = 3u;
+    game->weapon = 0u;
+    game->current_level = active_level_index;
+    game->kills = 0u;
+    game->game_over = 0u;
+    gameplay_runtime_init();
+    gameplay_reset_player(game);
 }
 
 void game_graphics_init(void) {
@@ -3196,6 +3681,16 @@ void game_graphics_init(void) {
     gfx_palette[COLOR_BUILTIN] = gfx_RGBTo1555(180, 180, 180);
     gfx_palette[COLOR_CEILING] = gfx_RGBTo1555(22, 24, 38);
     gfx_palette[COLOR_CEILING_NEAR] = gfx_RGBTo1555(46, 49, 68);
+    gfx_palette[COLOR_GAME_RED] = gfx_RGBTo1555(245, 52, 48);
+    gfx_palette[COLOR_GAME_RED_DARK] = gfx_RGBTo1555(118, 25, 30);
+    gfx_palette[COLOR_GAME_GREEN] = gfx_RGBTo1555(55, 235, 94);
+    gfx_palette[COLOR_GAME_YELLOW] = gfx_RGBTo1555(250, 218, 58);
+    gfx_palette[COLOR_GAME_CYAN] = gfx_RGBTo1555(58, 205, 245);
+    gfx_palette[COLOR_GAME_WHITE] = gfx_RGBTo1555(245, 245, 245);
+    gfx_palette[COLOR_GAME_GRAY] = gfx_RGBTo1555(122, 137, 150);
+    gfx_palette[COLOR_GAME_DARK] = gfx_RGBTo1555(12, 15, 22);
+    gfx_palette[COLOR_GAME_ORANGE] = gfx_RGBTo1555(245, 138, 45);
+    gfx_palette[COLOR_GAME_PURPLE] = gfx_RGBTo1555(176, 70, 225);
 
     for (material = 0; material < WALL_TEXTURE_COUNT; ++material) {
         for (shade = 0; shade < WALL_SHADE_LEVELS; ++shade) {
@@ -3262,7 +3757,12 @@ uint8_t game_update(
     game->angle = (uint16_t)((game->angle + turn_axis * turn_amount) & ANGLE_MASK);
 
     move_amount = (fixed_t)(((int32_t)MOVE_SPEED * elapsed_ticks) / ticks_per_second);
-    move_player(game, (fixed_t)(move_axis * move_amount));
+    if (!game->game_over) {
+        move_player(game, (fixed_t)(move_axis * move_amount));
+    }
+    (void)gameplay_update(
+        game, pressed, elapsed_ticks, ticks_per_second
+    );
 
     return (uint8_t)(
         game->player_x != previous_x ||
@@ -3275,8 +3775,289 @@ uint8_t game_update(
         game->secondary.x != previous_secondary.x ||
         game->secondary.y != previous_secondary.y ||
         game->secondary.direction != previous_secondary.direction ||
-        game->secondary.valid != previous_secondary.valid
+        game->secondary.valid != previous_secondary.valid ||
+        pressed != 0u || gameplay.message_time != 0u || !game->game_over
     );
+}
+
+static uint8_t gameplay_sprite_color(
+    uint8_t kind,
+    uint8_t section,
+    uint8_t hurt
+) {
+    if (kind == SPRITE_EXIT) return hurt ? COLOR_GAME_RED : COLOR_GAME_GREEN;
+    if (hurt && kind <= SPRITE_BOSS) return COLOR_GAME_WHITE;
+    if (kind == SPRITE_TURRET) return section == 0u ?
+        COLOR_GAME_RED : COLOR_GAME_GRAY;
+    if (kind == SPRITE_HUNTER) return section == 0u ?
+        COLOR_GAME_YELLOW : COLOR_GAME_RED_DARK;
+    if (kind == SPRITE_BOSS) return section == 0u ?
+        COLOR_GAME_PURPLE : COLOR_GAME_RED;
+    if (kind == SPRITE_AMMO) return COLOR_GAME_YELLOW;
+    if (kind == SPRITE_HEALTH) return section == 0u ?
+        COLOR_GAME_WHITE : COLOR_GAME_GREEN;
+    if (kind == SPRITE_SHELLS) return COLOR_GAME_ORANGE;
+    if (kind == SPRITE_LIFE) return COLOR_GAME_CYAN;
+    if (kind == SPRITE_DOOR) return section == 0u ?
+        COLOR_GAME_CYAN : COLOR_GAME_GRAY;
+    return section == 0u ? COLOR_GAME_WHITE : COLOR_GAME_CYAN;
+}
+
+static void gameplay_draw_billboard(
+    const GameState *game,
+    fixed_t world_x,
+    fixed_t world_y,
+    uint8_t kind,
+    uint8_t hurt,
+    uint8_t portal_clip,
+    uint8_t rise
+) {
+    fixed_t dir_x;
+    fixed_t dir_y;
+    fixed_t dx = world_x - game->player_x;
+    fixed_t dy = world_y - game->player_y;
+    fixed_t depth;
+    fixed_t side;
+    int24_t center;
+    int24_t height;
+    int24_t half_width;
+    int24_t top;
+    int24_t bottom;
+    int24_t first_column;
+    int24_t last_column;
+    int24_t column;
+
+    direction_for_angle(game->angle, &dir_x, &dir_y);
+    depth = (fixed_t)(((int32_t)dx * dir_x + (int32_t)dy * dir_y) / FIXED_ONE);
+    if (depth < 48 || depth > FIXED_ONE * 18) return;
+    side = (fixed_t)(((int32_t)dx * -dir_y + (int32_t)dy * dir_x) / FIXED_ONE);
+    center = 160 + (int24_t)(((int32_t)side * 40960L) / ((int32_t)depth * FIELD_OF_VIEW));
+    height = (int24_t)(61440L / depth);
+    if (kind >= SPRITE_AMMO && kind <= SPRITE_LIFE) height /= 2;
+    if (kind == SPRITE_BOSS) height = (height * 5) / 4;
+    if (height < 5) height = 5;
+    if (height > 230) height = 230;
+    half_width = kind == SPRITE_DOOR ? height / 2 :
+        (kind == SPRITE_BOSS ? height / 3 : height / 4);
+    if (half_width < 3) half_width = 3;
+    top = 120 - height / 2;
+    bottom = top + height;
+    if (kind == SPRITE_DOOR) {
+        int24_t lift = (height * rise) / 255;
+        top -= lift;
+        bottom -= lift;
+    }
+    first_column = (center - half_width) / COLUMN_WIDTH;
+    last_column = (center + half_width) / COLUMN_WIDTH;
+    if (first_column < 0) first_column = 0;
+    if (last_column >= LOGICAL_COLUMNS) last_column = LOGICAL_COLUMNS - 1;
+
+    for (column = first_column; column <= last_column; ++column) {
+        fixed_t wall_depth = render_column_depth[column];
+        int24_t draw_top = top;
+        int24_t draw_bottom = bottom;
+        int24_t local = column * COLUMN_WIDTH + 2 - center;
+        uint8_t color_top;
+        uint8_t color_body;
+        int24_t head_end;
+
+        if (portal_clip != PORTAL_NONE) {
+            if (render_first_portal_kind[column] != portal_clip) continue;
+            if (draw_top < render_first_portal_top[column]) {
+                draw_top = render_first_portal_top[column];
+            }
+            if (draw_bottom > render_first_portal_bottom[column]) {
+                draw_bottom = render_first_portal_bottom[column];
+            }
+        } else if (render_first_portal_kind[column] != PORTAL_NONE &&
+            depth >= render_first_portal_depth[column]) {
+            continue;
+        }
+        if (depth >= wall_depth || draw_bottom <= 0 || draw_top >= GFX_LCD_HEIGHT) continue;
+        if (draw_top < 0) draw_top = 0;
+        if (draw_bottom > GFX_LCD_HEIGHT) draw_bottom = GFX_LCD_HEIGHT;
+        if (fixed_abs(local) * 4 > half_width * 3 && kind != SPRITE_DOOR) {
+            draw_top += height / 8;
+            draw_bottom -= height / 10;
+        }
+        if (draw_bottom <= draw_top) continue;
+
+        color_top = gameplay_sprite_color(kind, 0u, hurt);
+        color_body = gameplay_sprite_color(kind, 1u, hurt);
+        head_end = draw_top + (draw_bottom - draw_top) / 3;
+        gfx_SetColor(color_top);
+        gfx_FillRectangle_NoClip(
+            column * COLUMN_WIDTH, draw_top, COLUMN_WIDTH,
+            (uint24_t)(head_end - draw_top)
+        );
+        gfx_SetColor(color_body);
+        gfx_FillRectangle_NoClip(
+            column * COLUMN_WIDTH, head_end, COLUMN_WIDTH,
+            (uint24_t)(draw_bottom - head_end)
+        );
+        if ((kind <= SPRITE_BOSS || kind == SPRITE_PLAYER) &&
+            draw_bottom - draw_top > 16) {
+            gfx_SetColor(COLOR_GAME_DARK);
+            gfx_FillRectangle_NoClip(
+                column * COLUMN_WIDTH,
+                draw_bottom - (draw_bottom - draw_top) / 6,
+                COLUMN_WIDTH,
+                (uint24_t)((draw_bottom - draw_top) / 6)
+            );
+        }
+        render_column_depth[column] = depth;
+    }
+}
+
+static void gameplay_virtual_player(
+    const Portal *entry,
+    const Portal *exit,
+    fixed_t player_x,
+    fixed_t player_y,
+    fixed_t *virtual_x,
+    fixed_t *virtual_y
+) {
+    fixed_t x = player_x - ((fixed_t)exit->x * FIXED_ONE + FIXED_ONE / 2);
+    fixed_t y = player_y - ((fixed_t)exit->y * FIXED_ONE + FIXED_ONE / 2);
+    int8_t rotation = portal_rotation(entry->direction, exit->direction);
+
+    rotate_quarter(&x, &y, (int8_t)-rotation);
+    if (entry->direction == DIR_NORTH || entry->direction == DIR_SOUTH) x = -x;
+    else y = -y;
+    *virtual_x = (fixed_t)entry->x * FIXED_ONE + FIXED_ONE / 2 + x;
+    *virtual_y = (fixed_t)entry->y * FIXED_ONE + FIXED_ONE / 2 + y;
+}
+
+static __attribute__((unused)) void gameplay_render_world(const GameState *game) {
+    uint8_t index;
+
+    for (index = 0; index < gameplay.door_count; ++index) {
+        const GameplayDoor *door = &gameplay.doors[index];
+        if (door->progress < 255u) {
+            gameplay_draw_billboard(
+                game, door->x, door->y, SPRITE_DOOR, 0u,
+                PORTAL_NONE, (uint8_t)door->progress
+            );
+        }
+    }
+    for (index = 0; index < gameplay.pickup_count; ++index) {
+        const GameplayPickup *pickup = &gameplay.pickups[index];
+        if (pickup->active) {
+            gameplay_draw_billboard(
+                game, pickup->x, pickup->y,
+                (uint8_t)(SPRITE_AMMO + pickup->kind), 0u,
+                PORTAL_NONE, 0u
+            );
+        }
+    }
+    gameplay_draw_billboard(
+        game, gameplay.exit_x, gameplay.exit_y, SPRITE_EXIT,
+        (uint8_t)!gameplay.exit_open, PORTAL_NONE, 0u
+    );
+    for (index = 0; index < gameplay.enemy_count; ++index) {
+        const GameplayEnemy *enemy = &gameplay.enemies[index];
+        if (enemy->active) {
+            gameplay_draw_billboard(
+                game, enemy->x, enemy->y,
+                (uint8_t)(SPRITE_TURRET + enemy->kind), enemy->hurt,
+                PORTAL_NONE, 0u
+            );
+        }
+    }
+
+    if (game->primary.valid && game->secondary.valid) {
+        fixed_t virtual_x;
+        fixed_t virtual_y;
+
+        gameplay_virtual_player(
+            &game->primary, &game->secondary,
+            game->player_x, game->player_y, &virtual_x, &virtual_y
+        );
+        gameplay_draw_billboard(
+            game, virtual_x, virtual_y, SPRITE_PLAYER, 0u,
+            PORTAL_PRIMARY, 0u
+        );
+        gameplay_virtual_player(
+            &game->secondary, &game->primary,
+            game->player_x, game->player_y, &virtual_x, &virtual_y
+        );
+        gameplay_draw_billboard(
+            game, virtual_x, virtual_y, SPRITE_PLAYER, 0u,
+            PORTAL_SECONDARY, 0u
+        );
+    }
+}
+
+static const char *gameplay_message_text(uint8_t message) {
+    static const char *const messages[] = {
+        "", "EMPTY", "HIT", "TARGET DOWN", "BOSS DOWN - EXIT OPEN",
+        "DAMAGE", "LIFE LOST", "DOOR OPENING", "PICKUP", "CHAMBER CLEARED"
+    };
+
+    return message < sizeof(messages) / sizeof(messages[0]) ? messages[message] : "";
+}
+
+static __attribute__((unused)) void gameplay_render_hud(const GameState *game) {
+    uint8_t ammo = game->weapon == 0u ? game->ammo : game->shells;
+    uint8_t gun_y = (uint8_t)(184u + (game->recoil ? game->recoil * 2u : 0u));
+
+    gfx_SetColor(COLOR_GAME_DARK);
+    gfx_FillRectangle_NoClip(0, 226, GFX_LCD_WIDTH, 14);
+    gfx_SetTextFGColor(COLOR_GAME_WHITE);
+    gfx_SetTextBGColor(COLOR_GAME_DARK);
+    gfx_SetTextTransparentColor(COLOR_GAME_DARK);
+    gfx_SetTextScale(1, 1);
+    gfx_PrintStringXY("HP", 3, 229);
+    gfx_SetTextXY(22, 229);
+    gfx_PrintUInt(game->health, 3);
+    gfx_PrintStringXY("AMMO", 60, 229);
+    gfx_SetTextXY(96, 229);
+    gfx_PrintUInt(ammo, 2);
+    gfx_PrintStringXY("LIVES", 130, 229);
+    gfx_SetTextXY(172, 229);
+    gfx_PrintUInt(game->lives, 1);
+    gfx_PrintStringXY(game->weapon == 0u ? "PISTOL" : "SHOTGUN", 205, 229);
+    gfx_PrintStringXY("L", 282, 229);
+    gfx_SetTextXY(293, 229);
+    gfx_PrintUInt((uint24_t)active_level_index + 1u, 1);
+
+    gfx_SetColor(COLOR_GAME_WHITE);
+    gfx_HorizLine_NoClip(156, 120, 9);
+    gfx_VertLine_NoClip(160, 116, 9);
+
+    gfx_SetColor(game->weapon == 0u ? COLOR_GAME_GRAY : COLOR_GAME_RED_DARK);
+    gfx_FillRectangle_NoClip(
+        game->weapon == 0u ? 146 : 136,
+        gun_y,
+        game->weapon == 0u ? 28 : 48,
+        (uint24_t)(226u - gun_y)
+    );
+    gfx_SetColor(COLOR_GAME_DARK);
+    gfx_FillRectangle_NoClip(155, gun_y, 10, 26);
+
+    if (gameplay.message_time != 0u) {
+        const char *message = gameplay_message_text(gameplay.message);
+        uint24_t width = gfx_GetStringWidth(message);
+        gfx_SetColor(COLOR_GAME_DARK);
+        gfx_FillRectangle_NoClip(
+            (GFX_LCD_WIDTH - width) / 2u - 4u, 17,
+            width + 8u, 12
+        );
+        gfx_SetTextFGColor(COLOR_GAME_YELLOW);
+        gfx_PrintStringXY(message, (GFX_LCD_WIDTH - width) / 2u, 19);
+    }
+    if (game->game_over) {
+        const char *title = game->game_over == 2u ? "MISSION COMPLETE" : "GAME OVER";
+        uint24_t width = gfx_GetStringWidth(title);
+        gfx_SetColor(COLOR_GAME_DARK);
+        gfx_FillRectangle_NoClip(54, 82, 212, 58);
+        gfx_SetTextScale(2, 2);
+        gfx_SetTextFGColor(game->game_over == 2u ? COLOR_GAME_GREEN : COLOR_GAME_RED);
+        gfx_PrintStringXY(title, (GFX_LCD_WIDTH - width * 2u) / 2u, 91);
+        gfx_SetTextScale(1, 1);
+        gfx_SetTextFGColor(COLOR_GAME_WHITE);
+        gfx_PrintStringXY("MODE: RESTART", 108, 124);
+    }
 }
 
 void game_render(const GameState *game) {
@@ -3377,6 +4158,11 @@ void game_render(const GameState *game) {
         ray_stepper_advance(&ray_x);
         ray_stepper_advance(&ray_y);
     }
+
+#if !RENDER_BENCHMARK
+    gameplay_render_world(game);
+    gameplay_render_hud(game);
+#endif
 
 #if RENDER_PROFILE
     render_profile.columns_ticks = clock() - mark;

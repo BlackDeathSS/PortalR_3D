@@ -22,10 +22,22 @@
 #endif
 
 /* Stable YYMMDD/revision ID written into every benchmark result. */
-#define TRUE3D_BUILD_VERSION 0x26081309UL
+#define TRUE3D_BUILD_VERSION 0x26081503UL
 
 #ifndef TRUE3D_RENDER_BENCHMARK
 #define TRUE3D_RENDER_BENCHMARK 0
+#endif
+
+/* Standalone games can opt into a small depth-sorted static mesh set without
+ * charging the portal demos any RAM.  A static box is a true six-face world
+ * mesh with independent X/Y/Z extents; it is visual scenery and does not join
+ * the dynamic physics solver. */
+#ifndef T3D3_STATIC_BOX_LIMIT
+#define T3D3_STATIC_BOX_LIMIT 0
+#endif
+
+#ifndef T3D3_MATERIAL_TEXTURE
+#define T3D3_MATERIAL_TEXTURE 0
 #endif
 
 typedef enum {
@@ -109,6 +121,9 @@ typedef struct {
     uint8_t dev_mode;
     uint8_t render_shift;
     uint8_t noclip;
+    /* Horizontal speed created by a floor/ceiling-to-wall portal must not be
+     * replaced by the next frame's ordinary walking input. */
+    uint8_t portal_momentum;
 } EngineState;
 
 _Static_assert(sizeof(EngineState) <= 64u, "True-3D player state exceeded 64 bytes");
@@ -135,6 +150,16 @@ uint8_t engine_spawn_body(
 );
 const T3D3Body *engine_body_read(uint8_t index);
 uint8_t engine_held_body(void);
+
+#if T3D3_STATIC_BOX_LIMIT > 0
+void engine_static_scene_reset(void);
+uint8_t engine_spawn_static_box(
+    Vec3 position,
+    Vec3 half_extents,
+    uint8_t room,
+    uint8_t color
+);
+#endif
 
 #if TRUE3D_RENDER_BENCHMARK
 uint8_t engine_benchmark_configure_dual_portal_stress(EngineState *state);

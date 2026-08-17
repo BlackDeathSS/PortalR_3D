@@ -14,6 +14,9 @@
 #ifndef T3D3_PORTAL_PUSH_TEST
 #define T3D3_PORTAL_PUSH_TEST 0
 #endif
+#ifndef T3D3_PLAYER_FLING_TEST
+#define T3D3_PLAYER_FLING_TEST 0
+#endif
 
 #define FIXED_SHIFT 8
 #define FIXED_ONE ((fixed_t)1 << FIXED_SHIFT)
@@ -70,6 +73,13 @@
 #define PORTAL_LOD_HEIGHT (RENDER_HEIGHT / 2)
 #define SHADED_PALETTE_FIRST 16u
 #define SHADE_LEVEL_COUNT 4u
+#define WALL_SHADE_NEAR_DEPTH (8 * FIXED_ONE)
+#define WALL_SHADE_MIDDLE_DEPTH (16 * FIXED_ONE)
+#define WALL_SHADE_FAR_DEPTH (24 * FIXED_ONE)
+#define PANEL_SEAM_INTERVAL (4 * FIXED_ONE)
+#define PANEL_DEPTH_SEAM_COUNT 2u
+#define PANEL_DEPTH_SEAM_CANDIDATES 4u
+#define PANEL_DEPTH_SEAM_MIN_DELTA (2 * FIXED_ONE)
 
 #define MOVE_SPEED 640
 #define TURN_UNITS_PER_SECOND 80u
@@ -100,6 +110,7 @@
 #define PLAYER_BODY_PUSH_SCALE 192
 #define PLAYER_BODY_VERTICAL_SLOP 16
 #define BODY_FLAT_LOD_DEPTH (8 * FIXED_ONE)
+#define BODY_DENSE_PORTAL_FLAT_LOD_DEPTH (3 * FIXED_ONE)
 #define NO_BODY 255u
 #define BODY_STORAGE_SLOTS 8u
 
@@ -307,6 +318,16 @@ static T3D3Body bodies[BODY_STORAGE_SLOTS];
 static uint8_t body_sleep_ticks[BODY_STORAGE_SLOTS];
 static uint8_t active_body_count;
 static uint8_t held_body = NO_BODY;
+
+#if T3D3_STATIC_BOX_LIMIT > 0
+typedef struct {
+    T3D3Body render_body;
+    Vec3 half_extents;
+} StaticBox;
+
+static StaticBox static_boxes[T3D3_STATIC_BOX_LIMIT];
+static uint8_t static_box_count;
+#endif
 
 static const Vec3 face_normals[ROOM_FACE_COUNT] = {
     {0, 0, 256},
@@ -1148,6 +1169,24 @@ static uint8_t prepare_face_polygon(
     polygon->top_vertex = 0;
     if (!polygon_intersects_layer(polygon, layer)) return 0;
     polygon->color = face->color;
+    if (face_offset > 1u) {
+        int32_t depth_sum = 0;
+        uint8_t distance_light;
+        uint8_t orientation_light = face_light_level[face_offset];
+
+        for (index = 0; index < 4u; ++index) {
+            depth_sum += camera_vertices[
+                box_face_vertices[face_offset][index]
+            ].depth;
+        }
+        depth_sum >>= 2;
+        distance_light = depth_sum <= WALL_SHADE_NEAR_DEPTH ? 3u :
+            (depth_sum <= WALL_SHADE_MIDDLE_DEPTH ? 2u :
+                (depth_sum <= WALL_SHADE_FAR_DEPTH ? 1u : 0u));
+        if (distance_light < orientation_light) {
+            polygon->color -= orientation_light - distance_light;
+        }
+    }
     polygon->portal = NO_PORTAL;
     polygon->face = face_index;
     polygon->face_offset = face_offset;
@@ -1327,6 +1366,106 @@ static __attribute__((always_inline)) inline int16_t floor_q8(int24_t value) {
 
 static __attribute__((always_inline)) inline int16_t ceil_q8(int24_t value) {
     return (int16_t)((value + FIXED_ONE - 1) >> FIXED_SHIFT);
+}
+
+static fixed_t panel_grid_floor(fixed_t coordinate) {
+    return (fixed_t)(coordinate & -PANEL_SEAM_INTERVAL);
+}
+
+static void write_frame_span(
+    uint8_t row,
+    int16_t first_column,
+    int16_t last_column,
+    uint8_t color
+);
+
+/* A world-grid plane perpendicular to the camera's dominant horizontal axis
+ * projects to an almost horizontal floor/ceiling seam.  Sampling its center
+ * gives the exact screen row without projecting and clipping two full line
+ * endpoints.  Later wall fills trim the span to the visible room surface. */
+static void draw_surface_depth_seams(
+    const Camera *camera,
+    const RenderLayer *layer,
+    const DrawPolygon *polygon,
+    uint8_t face_offset
+) {
+    const Room *room = &rooms[camera->room];
+    fixed_t forward_x = fixed_absolute(camera->forward.x);
+    fixed_t forward_y = fixed_absolute(camera->forward.y);
+    fixed_t camera_coordinate;
+    fixed_t minimum;
+    fixed_t maximum;
+    fixed_t coordinate;
+    fixed_t advance;
+    fixed_t plane_z;
+    uint8_t color;
+    uint8_t drawn = 0;
+    uint8_t candidate;
+    int16_t previous_row = -1;
+    uint8_t axis;
+
+    if (!layer->horizon_valid || face_offset > 1u) return;
+    axis = forward_x >= forward_y ? 0u : 1u;
+    camera_coordinate = axis == 0 ? camera->position.x : camera->position.y;
+    minimum = axis == 0 ? room->minimum_x : room->minimum_y;
+    maximum = axis == 0 ? room->maximum_x : room->maximum_y;
+    advance = (axis == 0 ? camera->forward.x : camera->forward.y) >= 0 ?
+        PANEL_SEAM_INTERVAL : -PANEL_SEAM_INTERVAL;
+    coordinate = panel_grid_floor(camera_coordinate);
+    if (advance > 0) {
+        coordinate += PANEL_SEAM_INTERVAL;
+    } else if (coordinate == camera_coordinate) {
+        coordinate -= PANEL_SEAM_INTERVAL;
+    }
+    plane_z = face_offset == 0 ? room->minimum_z : room->maximum_z;
+    {
+        const WorldFace *face = &world_faces[room->first_face + face_offset];
+        uint8_t light = face_light_level[face_offset];
+
+        color = (uint8_t)(face->color + (light == 0 ? 0 : light - 1u));
+    }
+
+    for (candidate = 0;
+         candidate < PANEL_DEPTH_SEAM_CANDIDATES &&
+            drawn < PANEL_DEPTH_SEAM_COUNT;
+         ++candidate, coordinate += advance) {
+        Vec3 point = camera->position;
+        CameraPoint transformed;
+        ScreenPoint projected;
+        int16_t row;
+
+        if (coordinate <= minimum || coordinate >= maximum) {
+            if ((advance > 0 && coordinate >= maximum) ||
+                (advance < 0 && coordinate <= minimum)) {
+                break;
+            }
+            continue;
+        }
+        if (fixed_absolute(coordinate - camera_coordinate) <
+            PANEL_DEPTH_SEAM_MIN_DELTA) {
+            continue;
+        }
+        if (axis == 0) point.x = coordinate;
+        else point.y = coordinate;
+        point.z = plane_z;
+        transformed = transform_point(camera, point);
+        if (transformed.depth < NEAR_PLANE) continue;
+        projected = project_camera_point(&transformed);
+        row = floor_q8(projected.y + FIXED_ONE / 2);
+        if (row < polygon->sample_first_row || row > polygon->sample_last_row ||
+            row < layer->first_row || row > layer->last_row ||
+            row < 0 || row >= active_render_height || row == previous_row) {
+            continue;
+        }
+        write_frame_span(
+            (uint8_t)row,
+            layer->row_left[row],
+            layer->row_right[row],
+            color
+        );
+        previous_row = row;
+        ++drawn;
+    }
 }
 
 /* Scan conversion only needs a clipped byte column. Range-checking before an
@@ -2068,35 +2207,52 @@ static uint8_t build_portal_clip(
         uint8_t normalized_width = width;
         uint8_t normalized_height = height;
         uint8_t lod = portal_lod_state[portal_polygon->portal];
+        uint8_t full_detail;
+        uint8_t reduced_detail;
+        uint8_t heavy_portal_pair = (uint8_t)(
+            active_body_count >= T3D3_MAX_BODIES &&
+            parent->count == PORTAL_COUNT
+        );
 
         if (active_render_shift != 0) {
             normalized_area <<= 2;
             normalized_width <<= 1;
             normalized_height <<= 1;
         }
+        full_detail = (uint8_t)(
+            normalized_area > PORTAL_LOD_FULL_ENTER_AREA &&
+            normalized_width > PORTAL_LOD_FULL_ENTER_WIDTH &&
+            normalized_height > PORTAL_LOD_FULL_ENTER_HEIGHT
+        );
+        reduced_detail = (uint8_t)(
+            normalized_area < PORTAL_LOD_HALF_ENTER_AREA ||
+            normalized_width < PORTAL_LOD_HALF_ENTER_WIDTH ||
+            normalized_height < PORTAL_LOD_HALF_ENTER_HEIGHT
+        );
 
         if (lod == 0) {
-            if (normalized_area < PORTAL_LOD_QUARTER_ENTER_AREA) {
+            if (normalized_area < PORTAL_LOD_QUARTER_ENTER_AREA ||
+                (heavy_portal_pair && reduced_detail)) {
                 lod = 2;
-            } else if (normalized_area < PORTAL_LOD_HALF_ENTER_AREA ||
-                       normalized_width < PORTAL_LOD_HALF_ENTER_WIDTH ||
-                       normalized_height < PORTAL_LOD_HALF_ENTER_HEIGHT) {
+            } else if (reduced_detail) {
                 lod = 1;
             }
         } else if (lod == 1) {
-            if (normalized_area < PORTAL_LOD_QUARTER_ENTER_AREA) {
+            /* Four visible bodies already dominate root geometry.  When both
+             * portals are also visible, use the quarter-size portal scratch
+             * path for apertures that would otherwise be half-size.  Portal
+             * outlines remain full-resolution, and a large portal still
+             * promotes directly back to full detail. */
+            if (normalized_area < PORTAL_LOD_QUARTER_ENTER_AREA ||
+                (heavy_portal_pair && !full_detail)) {
                 lod = 2;
-            } else if (normalized_area > PORTAL_LOD_FULL_ENTER_AREA &&
-                       normalized_width > PORTAL_LOD_FULL_ENTER_WIDTH &&
-                       normalized_height > PORTAL_LOD_FULL_ENTER_HEIGHT) {
+            } else if (full_detail) {
                 lod = 0;
             }
         } else if (normalized_area > PORTAL_LOD_QUARTER_LEAVE_AREA) {
-            if (normalized_area > PORTAL_LOD_FULL_ENTER_AREA &&
-                normalized_width > PORTAL_LOD_FULL_ENTER_WIDTH &&
-                normalized_height > PORTAL_LOD_FULL_ENTER_HEIGHT) {
+            if (full_detail) {
                 lod = 0;
-            } else {
+            } else if (!heavy_portal_pair) {
                 lod = 1;
             }
         }
@@ -3048,10 +3204,19 @@ static void render_bodies(const Camera *camera, RenderLayer *layer) {
     CameraPoint cached_world_axis[3];
     CameraPoint cached_projected_extent;
     fixed_t cached_axis_extent = -1;
+    fixed_t flat_lod_depth = BODY_FLAT_LOD_DEPTH;
     uint8_t count = 0;
     uint8_t index;
 
     if (active_body_count == 0) return;
+    /* The two-portal/four-body view is the renderer's pathological case: all
+     * four root cubes are scan-converted again inside a destination view.
+     * Preserve exact faces for held/very-near bodies, but use the established
+     * box-silhouette LOD sooner for the rest of this one dense layout. */
+    if (active_body_count >= T3D3_MAX_BODIES &&
+        layer == &render_layers[0] && layer->count == PORTAL_COUNT) {
+        flat_lod_depth = BODY_DENSE_PORTAL_FLAT_LOD_DEPTH;
+    }
     for (index = 0; index < T3D3_MAX_BODIES; ++index) {
         CameraPoint transformed_center;
         uint8_t insert;
@@ -3114,9 +3279,124 @@ static void render_bodies(const Camera *camera, RenderLayer *layer) {
             cached_world_axis,
             &cached_projected_extent,
             layer,
+            flat_lod_depth
+        );
+    }
+}
+
+#if T3D3_STATIC_BOX_LIMIT > 0
+/* Static cabin scenery uses the same clipped six-face polygon path as dynamic
+ * cubes, but permits independent dimensions and never enters collision or
+ * portal physics.  Painter order is far-to-near because these fixtures are
+ * all contained by the convex room shell. */
+static uint8_t static_box_camera_bounds_visible(
+    const CameraPoint *center,
+    const CameraPoint *extent
+) {
+    fixed_t maximum_depth = center->depth + extent->depth;
+    fixed_t minimum_x;
+    fixed_t maximum_x;
+    fixed_t minimum_y;
+    fixed_t maximum_y;
+
+    if (maximum_depth < NEAR_PLANE) return 0u;
+    minimum_x = center->x - extent->x;
+    maximum_x = center->x + extent->x;
+    minimum_y = center->y - extent->y;
+    maximum_y = center->y + extent->y;
+    if ((int32_t)PROJECTION_FOCAL * maximum_x +
+            (int32_t)ROOM_CULL_HALF_WIDTH * maximum_depth < 0) {
+        return 0u;
+    }
+    if ((int32_t)PROJECTION_FOCAL * minimum_x -
+            (int32_t)ROOM_CULL_HALF_WIDTH * maximum_depth >= 0) {
+        return 0u;
+    }
+    if ((int32_t)PROJECTION_FOCAL * minimum_y -
+            (int32_t)ROOM_CULL_HALF_HEIGHT * maximum_depth > 0) {
+        return 0u;
+    }
+    if (-(int32_t)PROJECTION_FOCAL * maximum_y -
+            (int32_t)ROOM_CULL_HALF_HEIGHT * maximum_depth >= 0) {
+        return 0u;
+    }
+    return 1u;
+}
+
+static void render_static_boxes(const Camera *camera, RenderLayer *layer) {
+    uint8_t order[T3D3_STATIC_BOX_LIMIT];
+    fixed_t depth[T3D3_STATIC_BOX_LIMIT];
+    CameraPoint center[T3D3_STATIC_BOX_LIMIT];
+    CameraPoint world_axis[T3D3_STATIC_BOX_LIMIT][3];
+    CameraPoint projected_extent[T3D3_STATIC_BOX_LIMIT];
+    uint8_t count = 0u;
+    uint8_t index;
+
+    for (index = 0u; index < static_box_count; ++index) {
+        const StaticBox *box = &static_boxes[index];
+        uint8_t insert;
+
+        if (box->render_body.room != camera->room) continue;
+        center[index] = transform_point(camera, box->render_body.position);
+        scale_camera_room_edges_exact(
+            camera,
+            box->half_extents.x,
+            box->half_extents.y,
+            box->half_extents.z,
+            world_axis[index]
+        );
+        projected_extent[index].x =
+            fixed_absolute(world_axis[index][0].x) +
+            fixed_absolute(world_axis[index][1].x) +
+            fixed_absolute(world_axis[index][2].x);
+        projected_extent[index].y =
+            fixed_absolute(world_axis[index][0].y) +
+            fixed_absolute(world_axis[index][1].y) +
+            fixed_absolute(world_axis[index][2].y);
+        projected_extent[index].depth =
+            fixed_absolute(world_axis[index][0].depth) +
+            fixed_absolute(world_axis[index][1].depth) +
+            fixed_absolute(world_axis[index][2].depth);
+        if (!static_box_camera_bounds_visible(
+                &center[index],
+                &projected_extent[index]
+            )) {
+            continue;
+        }
+        insert = count;
+        while (insert != 0u &&
+               depth[insert - 1u] < center[index].depth) {
+            order[insert] = order[insert - 1u];
+            depth[insert] = depth[insert - 1u];
+            --insert;
+        }
+        order[insert] = index;
+        depth[insert] = center[index].depth;
+        ++count;
+    }
+
+    for (index = 0u; index < count; ++index) {
+        uint8_t box_index = order[index];
+        const StaticBox *box = &static_boxes[box_index];
+
+        render_body(
+            &box->render_body,
+            camera,
+            center[box_index],
+            world_axis[box_index],
+            &projected_extent[box_index],
+            layer,
             BODY_FLAT_LOD_DEPTH
         );
     }
+}
+#endif
+
+static void render_scene_objects(const Camera *camera, RenderLayer *layer) {
+    render_bodies(camera, layer);
+#if T3D3_STATIC_BOX_LIMIT > 0
+    render_static_boxes(camera, layer);
+#endif
 }
 
 static void render_room_faces_immediate(
@@ -3145,7 +3425,7 @@ static void render_room_faces_immediate(
             rasterize_fill_polygon_full(polygon, layer);
         }
     }
-    render_bodies(camera, layer);
+    render_scene_objects(camera, layer);
     layer->count = 0;
     layer->solid_count = 0;
 }
@@ -3495,6 +3775,9 @@ static void render_camera(
         RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_ROOT_FILL);
         rasterize_fill_polygon_full(polygon, layer);
         RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_ROOT_GEOMETRY);
+        if (index <= 1u) {
+            draw_surface_depth_seams(camera, layer, polygon, index);
+        }
     }
     for (index = 0; !exterior_view && index < PORTAL_COUNT; ++index) {
         const Portal *portal = &portals[index];
@@ -3539,7 +3822,7 @@ static void render_camera(
          * root-body projection and rasterization to root geometry explicitly
          * so portal composition is not blamed for the four-cube cost. */
         RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_ROOT_GEOMETRY);
-        render_bodies(camera, layer);
+        render_scene_objects(camera, layer);
     }
 }
 
@@ -3809,6 +4092,7 @@ static uint8_t try_portal_crossing(
         fixed_t local_up;
         fixed_t source_extent;
         fixed_t destination_extent;
+        uint8_t preserve_horizontal_momentum;
 
         if (!portal->active || !portals[portal->linked].active ||
             portal->room != state->room) {
@@ -3839,6 +4123,14 @@ static uint8_t try_portal_crossing(
             continue;
         }
 
+        preserve_horizontal_momentum = state->portal_momentum;
+        if (portals[portal->linked].normal.z != 0) {
+            /* A wall-to-floor/ceiling traversal rotates the launch back into
+             * Z, which ordinary movement already preserves. */
+            preserve_horizontal_momentum = 0u;
+        } else if (portal->normal.z != 0 && state->velocity.z != 0) {
+            preserve_horizontal_momentum = 1u;
+        }
         *candidate = transform_portal_point(portal_index, *candidate);
         state->velocity = transform_portal_vector(portal_index, state->velocity);
         state->right = transform_portal_vector(portal_index, state->right);
@@ -3846,6 +4138,10 @@ static uint8_t try_portal_crossing(
         state->forward = transform_portal_vector(portal_index, state->forward);
         recover_camera_angles(state);
         state->room = portals[portal->linked].room;
+        state->portal_momentum = (uint8_t)(
+            preserve_horizontal_momentum &&
+            (state->velocity.x != 0 || state->velocity.y != 0)
+        );
         add_signed_axis(
             candidate,
             portals[portal->linked].normal,
@@ -3901,6 +4197,49 @@ void engine_bodies_reset(void) {
     active_body_count = 0;
     held_body = NO_BODY;
 }
+
+#if T3D3_STATIC_BOX_LIMIT > 0
+void engine_static_scene_reset(void) {
+    memset(static_boxes, 0, sizeof(static_boxes));
+    static_box_count = 0u;
+}
+
+uint8_t engine_spawn_static_box(
+    Vec3 position,
+    Vec3 half_extents,
+    uint8_t room,
+    uint8_t color
+) {
+    StaticBox *box;
+    fixed_t maximum_extent;
+
+    if (static_box_count >= T3D3_STATIC_BOX_LIMIT || room >= room_count) {
+        return 0u;
+    }
+    if (half_extents.x < 4 || half_extents.y < 4 || half_extents.z < 4) {
+        return 0u;
+    }
+    if (color > TRUE3D_MAX_COLOR) color = COLOR_WALL_RED;
+    maximum_extent = half_extents.x;
+    if (half_extents.y > maximum_extent) maximum_extent = half_extents.y;
+    if (half_extents.z > maximum_extent) maximum_extent = half_extents.z;
+
+    box = &static_boxes[static_box_count];
+    memset(box, 0, sizeof(*box));
+    box->render_body.position = position;
+    box->render_body.basis_x = (Vec3){FIXED_ONE, 0, 0};
+    box->render_body.basis_y = (Vec3){0, FIXED_ONE, 0};
+    box->render_body.basis_z = (Vec3){0, 0, FIXED_ONE};
+    box->render_body.half_extent = maximum_extent;
+    box->render_body.room = room;
+    box->render_body.color = color;
+    box->render_body.active = 1u;
+    box->render_body.sleeping = 1u;
+    box->half_extents = half_extents;
+    ++static_box_count;
+    return static_box_count;
+}
+#endif
 
 const T3D3Body *engine_body_read(uint8_t index) {
     if (index >= T3D3_MAX_BODIES || !bodies[index].active) return NULL;
@@ -4576,6 +4915,9 @@ static uint8_t build_world(const True3DLevelView *level) {
 uint8_t engine_init(EngineState *state, const True3DLevelView *level) {
     if (state == NULL || !build_world(level)) return 0;
     engine_bodies_reset();
+#if T3D3_STATIC_BOX_LIMIT > 0
+    engine_static_scene_reset();
+#endif
     state->position.x = level->header->spawn_x;
     state->position.y = level->header->spawn_y;
     state->position.z = level->header->spawn_z;
@@ -4591,6 +4933,7 @@ uint8_t engine_init(EngineState *state, const True3DLevelView *level) {
     state->dev_mode = 0;
     state->render_shift = 0;
     state->noclip = 0;
+    state->portal_momentum = 0;
     memset(portal_lod_state, 0, sizeof(portal_lod_state));
     collide_with_room(state, &state->position);
 #if T3D3_PORTAL_PUSH_TEST
@@ -4625,6 +4968,35 @@ uint8_t engine_init(EngineState *state, const True3DLevelView *level) {
         ) == 0) {
         return 0;
     }
+#endif
+#if T3D3_PLAYER_FLING_TEST
+    /* Deterministic regression fixture: begin just above a floor portal with
+     * a ten-unit-per-second fall.  Its wall exit converts that entire vertical
+     * speed into -Y motion, which must survive later input/update frames. */
+    configure_portal_on_face(
+        0u,
+        0u,
+        0u,
+        (Vec3){0, 5 * FIXED_ONE, 0}
+    );
+    configure_portal_on_face(
+        1u,
+        0u,
+        3u,
+        (Vec3){0, 10 * FIXED_ONE, 640}
+    );
+    state->position = (Vec3){
+        0,
+        5 * FIXED_ONE,
+        PLAYER_EYE_HEIGHT + 64
+    };
+    state->velocity = (Vec3){0, 0, -2560};
+    state->yaw = 64u;
+    state->pitch = 0;
+    state->room = 0u;
+    state->grounded = 0u;
+    state->portal_momentum = 0u;
+    rebuild_camera_basis(state);
 #endif
     return 1;
 }
@@ -4666,6 +5038,7 @@ uint8_t engine_benchmark_configure_dual_portal_stress(EngineState *state) {
     state->dev_mode = 0u;
     state->render_shift = 0u;
     state->noclip = 0u;
+    state->portal_momentum = 0u;
     rebuild_camera_basis(state);
     collide_with_room(state, &state->position);
     engine_bodies_reset();
@@ -4828,6 +5201,7 @@ uint8_t engine_update(
         state->velocity.y = 0;
         state->velocity.z = 0;
         state->grounded = 0;
+        state->portal_momentum = 0;
     }
     if (state->dev_mode && (toggles & ENGINE_TOGGLE_NOCLIP) != 0) {
         state->noclip = (uint8_t)!state->noclip;
@@ -4835,6 +5209,7 @@ uint8_t engine_update(
         state->velocity.y = 0;
         state->velocity.z = 0;
         state->grounded = 0;
+        state->portal_momentum = 0;
 #if RENDER_WIDTH < 160
         /* A stationary transition can move from a culled black frame back to
          * room geometry with only one swap. Force both physical buffers to
@@ -4871,8 +5246,16 @@ uint8_t engine_update(
         }
     } else {
         movement_direction = horizontal_forward(state);
-        state->velocity.x = fixed_mul(movement_direction.x, move_axis * MOVE_SPEED);
-        state->velocity.y = fixed_mul(movement_direction.y, move_axis * MOVE_SPEED);
+        if (!state->portal_momentum) {
+            state->velocity.x = fixed_mul(
+                movement_direction.x,
+                move_axis * MOVE_SPEED
+            );
+            state->velocity.y = fixed_mul(
+                movement_direction.y,
+                move_axis * MOVE_SPEED
+            );
+        }
         state->velocity.z -= (fixed_t)(
             ((int32_t)GRAVITY * elapsed_ticks) / ticks_per_second
         );
@@ -4895,6 +5278,10 @@ uint8_t engine_update(
             &candidate
         );
         collide_with_room(state, &candidate);
+        if (state->portal_momentum &&
+            state->velocity.x == 0 && state->velocity.y == 0) {
+            state->portal_momentum = 0;
+        }
     }
     state->position = candidate;
     if (crossed_portal != 0) {
@@ -5153,6 +5540,65 @@ static void present_low_frame_cached(uint8_t dev_mode) {
 }
 #endif
 
+#if T3D3_MATERIAL_TEXTURE
+/* Sparse procedural wear is much smaller than a texture atlas and avoids a
+ * branch-heavy full-frame post-process on the eZ80.  Only corrosion samples
+ * and occasional horizontal weld rows are visited; all other pixels retain
+ * the polygon renderer's depth and face lighting unchanged. */
+static void apply_material_texture(const EngineState *state) {
+    uint8_t row;
+    uint8_t phase_x = (uint8_t)((state->position.x >> 6) + (state->yaw >> 2));
+    uint8_t phase_y = (uint8_t)((state->position.y >> 6) - (state->yaw >> 3));
+    uint8_t shaded_end = (uint8_t)(
+        SHADED_PALETTE_FIRST + (COLOR_HUD + 1u) * SHADE_LEVEL_COUNT
+    );
+
+    for (row = 0u; row < active_render_height; ++row) {
+        uint8_t v = (uint8_t)(row + phase_y);
+        uint8_t column = (uint8_t)(
+            ((3u ^ (uint8_t)(v << 1)) - phase_x) & 15u
+        );
+
+        /* Five possible samples per 80-pixel row, instead of testing every
+         * framebuffer pixel.  A palette decrement preserves the material and
+         * changes only its four-level light shade. */
+        for (; column < active_render_width; column = (uint8_t)(column + 16u)) {
+            uint8_t *pixel = &low_frame.data[
+                (uint16_t)row * active_render_width + column
+            ];
+            uint8_t color = *pixel;
+
+            if (color >= SHADED_PALETTE_FIRST && color < shaded_end) {
+                uint8_t relative = (uint8_t)(color - SHADED_PALETTE_FIRST);
+
+                if ((relative >> 2) >= COLOR_WALL_RED &&
+                    (relative & (SHADE_LEVEL_COUNT - 1u)) != 0u) {
+                    --*pixel;
+                }
+            }
+        }
+    }
+
+    /* Four widely spaced welded rows add readable panel scale at low
+     * resolution without reintroducing the old 4,800-pixel scan. */
+    row = (uint8_t)((16u - (phase_y & 15u)) & 15u);
+    for (; row < active_render_height; row = (uint8_t)(row + 16u)) {
+        uint8_t column;
+        uint8_t *pixel = &low_frame.data[(uint16_t)row * active_render_width];
+
+        for (column = 0u; column < active_render_width; ++column, ++pixel) {
+            uint8_t color = *pixel;
+
+            if (color >= SHADED_PALETTE_FIRST && color < shaded_end &&
+                ((color - SHADED_PALETTE_FIRST) &
+                    (SHADE_LEVEL_COUNT - 1u)) != 0u) {
+                --*pixel;
+            }
+        }
+    }
+}
+#endif
+
 void engine_render(const EngineState *state, uint16_t fps_tenths) {
     Camera camera;
     uint8_t row;
@@ -5186,6 +5632,9 @@ void engine_render(const EngineState *state, uint16_t fps_tenths) {
             (uint8_t)(state->dev_mode && state->noclip)
         );
     }
+#if T3D3_MATERIAL_TEXTURE
+    apply_material_texture(state);
+#endif
     RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_WAIT);
     gfx_Wait();
     RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_PRESENT);
