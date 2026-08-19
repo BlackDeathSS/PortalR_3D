@@ -1,0 +1,13 @@
+ 
+[submodule "include/fasmg"]
+	path = include/fasmg
+	url = https://github.com/jacobly0/fasmg-ez80
+[submodule "tools/texconv-src/lodepng"]
+	path = tools/texconv-src/lodepng
+	url = https://github.com/lvandeve/lodepng
+[submodule "tools/import-src/glm"]
+	path = tools/import-src/glm
+	url = https://github.com/g-truc/glm
+[submodule "tools/xmlconv-src/glm"]
+	path = tools/xmlconv-src/glm
+	url = https://github.com/g-truc/glm
