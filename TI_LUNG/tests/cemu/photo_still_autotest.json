@@ -1,0 +1,36 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/TI_LUNG/bin/TILUNG.8xp"
+  ],
+  "target": {"name": "TILUNG", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|450",
+    "hold|2nd",
+    "delay|120",
+    "release|2nd",
+    "delay|5000",
+    "hold|2nd",
+    "delay|120",
+    "release|2nd",
+    "hash|one_shot_photo",
+    "hash|one_shot_photo_back_buffer"
+  ],
+  "hashes": {
+    "one_shot_photo": {
+      "description": "One-shot low-poly photo stays on screen",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["325C7D41", "D3E1124A"]
+    },
+    "one_shot_photo_back_buffer": {
+      "description": "Photo back buffer is retained without rerendering",
+      "start": "vram2_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["D3E1124A", "325C7D41", "4D9ACEF2"]
+    }
+  }
+}

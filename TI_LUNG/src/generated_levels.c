@@ -6,9 +6,10 @@ typedef struct __attribute__((packed)) {
 } TiLungLevel;
 
 /* Room 0 is the walkable SM-13 pressure cabin. Room 1 is a 96 x 96 x 12
- * exterior volume; navigation coordinates are divided by ten before the
- * photographic camera is placed in this room. Portals remain disabled because
- * the cabin and the blood-ocean representation are deliberately separate. */
+ * exterior volume. Its faces are deliberately black: it is only a rendering
+ * container for streamed cave chunks, not a visible box around the map.
+ * Portals remain disabled because the cabin and blood-ocean representation
+ * are deliberately separate. */
 static const TiLungLevel ti_lung_level = {
     {
         {'T', '3', 'D', '1'}, TRUE3D_LEVEL_VERSION,
@@ -21,7 +22,7 @@ static const TiLungLevel ti_lung_level = {
     },
     {
         {-832, 832, -1152, 1152, 0, 896, {6, 7, 9, 8, 9, 8}},
-        {0, 24576, 0, 24576, 0, 3072, {1, 1, 9, 9, 9, 9}}
+        {-30000, 30000, -30000, 30000, 0, 3072, {0, 0, 0, 0, 0, 0}}
     }
 };
 

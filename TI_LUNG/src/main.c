@@ -2,12 +2,19 @@
 
 #include <graphx.h>
 #include <keypadc.h>
+#include <fileioc.h>
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
 
+#ifndef TI_LUNG_RAYCASTER
+#define TI_LUNG_RAYCASTER 0
+#endif
+
 #define FIXED_SHIFT 8
 #define FIXED_ONE ((fixed_t)1 << FIXED_SHIFT)
+#define NAV_SHIFT 12
+#define NAV_ONE ((int32_t)1 << NAV_SHIFT)
 #define UPDATE_RATE 30u
 
 #define CABIN_ROOM 0u
@@ -20,9 +27,19 @@
 #define SENSOR_RANGE (120 * FIXED_ONE)
 #define SENSOR_STEP (6 * FIXED_ONE)
 #define SENSOR_MAX_UNITS 120u
+#define PROXIMITY_DISPLAY_RANGE 13u
 #define PHOTO_POSITION_TOLERANCE (18 * FIXED_ONE)
 #define PHOTO_HEADING_TOLERANCE 1000u
 #define CAMERA_HEIGHT 640
+#define EXTERIOR_WORLD_SCALE 60
+#define EXTERIOR_WORLD_MIN (-28500)
+#define EXTERIOR_WORLD_MAX 28500
+#define PHOTO_RENDER_DISTANCE (30u * EXTERIOR_WORLD_SCALE)
+#define EXTERIOR_CHUNK_RADIUS 16u
+#define EXTERIOR_WALL_LIMIT 60u
+#define SAVE_NAME "TILUNGS"
+#define SAVE_MAGIC 0x54494C55UL
+#define SAVE_VERSION 2u
 
 #define EVENT_SENSOR_GHOST (1u << 0)
 #define EVENT_FISH_ONE (1u << 1)
@@ -31,6 +48,9 @@
 #define EVENT_EYE_ACTIVE (1u << 4)
 #define EVENT_EYE_SEEN (1u << 5)
 #define EVENT_FINAL (1u << 6)
+#define EVENT_BONE_FISH (1u << 7)
+#define EVENT_BONE_EEL (1u << 8)
+#define EVENT_BONE_MAW (1u << 9)
 
 enum UiColor {
     UI_BLACK = 0,
@@ -63,7 +83,8 @@ enum LungView {
     VIEW_BRIEFING,
     VIEW_PHOTO,
     VIEW_ATTACK,
-    VIEW_END
+    VIEW_END,
+    VIEW_DEBUG
 };
 
 enum Station {
@@ -76,7 +97,8 @@ enum Station {
 enum EdgeKey {
     EDGE_USE = 1u << 0,
     EDGE_MAP = 1u << 1,
-    EDGE_BRIEFING = 1u << 2
+    EDGE_BRIEFING = 1u << 2,
+    EDGE_DEBUG = 1u << 3
 };
 
 enum MessageId {
@@ -89,7 +111,11 @@ enum MessageId {
     MESSAGE_EYE,
     MESSAGE_PHOTO_VALID,
     MESSAGE_PHOTO_INVALID,
-    MESSAGE_FIRE_OUT
+    MESSAGE_FIRE_OUT,
+    MESSAGE_BONE_FISH,
+    MESSAGE_BONE_EEL,
+    MESSAGE_BONE_MAW,
+    MESSAGE_BONE_PHOTO
 };
 
 typedef struct {
@@ -107,7 +133,21 @@ typedef struct {
 typedef struct {
     fixed_t x;
     fixed_t y;
-    fixed_t sensor[4];
+    uint8_t phase;
+    uint8_t speed;
+    uint8_t radius;
+    uint8_t kind;
+    uint8_t active;
+} SkeletalCreature;
+
+typedef struct {
+    fixed_t x;
+    fixed_t y;
+    /* Navigation lives at 1/4096th-coordinate precision.  x/y are compact
+       Q8 mirrors retained for the sensor field and legacy level helpers. */
+    int32_t precise_x;
+    int32_t precise_y;
+    fixed_t sensor[16];
     uint16_t heading_cdeg;
     uint16_t photo_count;
     uint16_t documented_mask;
@@ -131,7 +171,15 @@ typedef struct {
     uint16_t waypoint_x;
     uint16_t waypoint_y;
     uint8_t waypoint_active;
+    uint16_t photo_ticks;
+    uint16_t autosave_ticks;
 } LungState;
+
+typedef struct {
+    uint32_t magic;
+    uint8_t version;
+    LungState state;
+} LungSave;
 
 static const int16_t quarter_sine[65] = {
     0, 6, 13, 19, 25, 31, 38, 44, 50, 56, 62, 68, 74, 80, 86, 92,
@@ -171,6 +219,22 @@ static EngineState cabin_camera;
 static LungState lung;
 static uint8_t cave_bits[CAVE_SIZE][CAVE_SIZE / 8u];
 static uint16_t displayed_fps_tenths = 100u;
+static uint8_t exterior_chunk_x = 0xFFu;
+static uint8_t exterior_chunk_y = 0xFFu;
+static uint8_t debug_poi_index = 0xFFu;
+static uint8_t debug_prgm_held;
+static uint8_t debug_stat_held;
+static uint8_t debug_creature_index = 0xFFu;
+static SkeletalCreature creatures[3];
+
+static uint8_t build_exterior_scene(
+    uint8_t scene, uint8_t debug_red, uint8_t include_subject
+);
+static void setup_exterior_camera(void);
+static void draw_debug_view(void);
+static void configure_ui_palette(void);
+static void initialize_palette(void);
+static void debug_teleport_next_poi(void);
 
 static fixed_t fixed_absolute(fixed_t value) {
     return value < 0 ? -value : value;
@@ -178,6 +242,38 @@ static fixed_t fixed_absolute(fixed_t value) {
 
 static fixed_t fixed_mul(fixed_t left, fixed_t right) {
     return (fixed_t)(((int32_t)left * right) >> FIXED_SHIFT);
+}
+
+static fixed_t precise_to_fixed(int32_t value) {
+    return (fixed_t)(value >> (NAV_SHIFT - FIXED_SHIFT));
+}
+
+/* The navigation map remains 950 units wide, but its 3D representation is
+   centred and stretched to make the blood ocean feel properly enormous. */
+static fixed_t exterior_world_from_map(uint16_t coordinate) {
+    return (fixed_t)(((int32_t)coordinate - (MAP_LIMIT / 2u)) *
+        EXTERIOR_WORLD_SCALE);
+}
+
+static uint16_t exterior_map_from_world(fixed_t coordinate) {
+    int32_t map_coordinate = (int32_t)coordinate / EXTERIOR_WORLD_SCALE +
+        (MAP_LIMIT / 2u);
+
+    if (map_coordinate < 0) return 0u;
+    if (map_coordinate > MAP_LIMIT) return MAP_LIMIT;
+    return (uint16_t)map_coordinate;
+}
+
+static void set_navigation_position(uint16_t x, uint16_t y) {
+    lung.precise_x = (int32_t)x * NAV_ONE;
+    lung.precise_y = (int32_t)y * NAV_ONE;
+    lung.x = precise_to_fixed(lung.precise_x);
+    lung.y = precise_to_fixed(lung.precise_y);
+}
+
+static void sync_navigation_position(void) {
+    lung.x = precise_to_fixed(lung.precise_x);
+    lung.y = precise_to_fixed(lung.precise_y);
 }
 
 static fixed_t angle_sine(uint8_t angle) {
@@ -198,12 +294,6 @@ static uint16_t heading_difference(uint16_t first, uint16_t second) {
     uint16_t difference = first > second ? first - second : second - first;
 
     return difference > 18000u ? 36000u - difference : difference;
-}
-
-static uint8_t angle_difference_u8(uint8_t first, uint8_t second) {
-    uint8_t difference = first > second ? first - second : second - first;
-
-    return difference > 128u ? (uint8_t)(256u - difference) : difference;
 }
 
 static void rebuild_basis(EngineState *state) {
@@ -234,17 +324,17 @@ static void set_text(uint8_t color, int16_t x, int16_t y) {
     gfx_SetTextXY(x, y);
 }
 
-static void print_fixed_hundredths(fixed_t value) {
-    uint24_t magnitude;
-    uint24_t hundredths;
+static void print_precise_hundredths(int32_t value) {
+    uint32_t magnitude;
+    uint32_t hundredths;
 
     if (value < 0) {
         gfx_PrintChar('-');
-        magnitude = (uint24_t)-value;
+        magnitude = (uint32_t)-value;
     } else {
-        magnitude = (uint24_t)value;
+        magnitude = (uint32_t)value;
     }
-    hundredths = (magnitude * 100u + 128u) >> FIXED_SHIFT;
+    hundredths = (magnitude * 100u + NAV_ONE / 2u) >> NAV_SHIFT;
     gfx_PrintUInt(hundredths / 100u, 1u);
     gfx_PrintChar('.');
     gfx_PrintUInt(hundredths % 100u, 2u);
@@ -254,6 +344,12 @@ static void print_heading(void) {
     gfx_PrintUInt(lung.heading_cdeg / 100u, 3u);
     gfx_PrintChar('.');
     gfx_PrintUInt(lung.heading_cdeg % 100u, 2u);
+}
+
+static void print_heading_value(uint16_t heading_cdeg) {
+    gfx_PrintUInt(heading_cdeg / 100u, 3u);
+    gfx_PrintChar('.');
+    gfx_PrintUInt(heading_cdeg % 100u, 2u);
 }
 
 static uint8_t documented_count(void) {
@@ -398,29 +494,84 @@ static fixed_t cast_sensor(uint8_t angle) {
     return SENSOR_RANGE;
 }
 
+static void update_creatures(void) {
+    static const uint16_t event_mask[3] = {
+        EVENT_BONE_FISH, EVENT_BONE_EEL, EVENT_BONE_MAW
+    };
+    uint8_t index;
+
+    for (index = 0u; index < 3u; ++index) {
+        SkeletalCreature *creature = &creatures[index];
+        creature->active = (uint8_t)(
+            (lung.event_flags & event_mask[index]) != 0u ||
+            debug_creature_index == index
+        );
+        if (!creature->active) continue;
+        creature->phase = (uint8_t)(creature->phase + creature->speed);
+        /* The organisms circle the hull rather than occupying a fixed map
+           prop. Different radii/speeds make the returns cross the camera and
+           four proximity quadrants independently. */
+        creature->x = lung.x + fixed_mul(
+            angle_sine(creature->phase),
+            (fixed_t)creature->radius * FIXED_ONE
+        );
+        creature->y = lung.y + fixed_mul(
+            angle_sine((uint8_t)(creature->phase + 64u)),
+            (fixed_t)creature->radius * FIXED_ONE
+        );
+    }
+}
+
+static fixed_t creature_distance(const SkeletalCreature *creature) {
+    fixed_t dx = fixed_absolute(creature->x - lung.x);
+    fixed_t dy = fixed_absolute(creature->y - lung.y);
+    return dx > dy ? dx : dy;
+}
+
 static void update_sensors(void) {
     uint8_t angle = heading_angle();
+    uint8_t index;
 
-    lung.sensor[0] = cast_sensor(angle);
-    lung.sensor[1] = cast_sensor((uint8_t)(angle + 64u));
-    lung.sensor[2] = cast_sensor((uint8_t)(angle + 128u));
-    lung.sensor[3] = cast_sensor((uint8_t)(angle - 64u));
+    for (index = 0u; index < 16u; ++index) {
+        lung.sensor[index] = cast_sensor((uint8_t)(angle + index * 16u));
+    }
 
     if ((lung.x >= 532 * FIXED_ONE && lung.x <= 550 * FIXED_ONE &&
          documented_count() >= 4u) ||
         (lung.event_flags & EVENT_EYE_ACTIVE) != 0u) {
         lung.sensor[0] = FIXED_ONE;
     }
-}
 
-static fixed_t nearest_sensor(void) {
-    fixed_t result = lung.sensor[0];
-    uint8_t index;
+    /* A close moving skeleton is a real sonar return. Choose the nearest of
+       the four body-relative transducers; distant creatures remain silent. */
+    for (index = 0u; index < 3u; ++index) {
+        SkeletalCreature *creature = &creatures[index];
+        fixed_t distance;
+        fixed_t dx;
+        fixed_t dy;
+        int32_t best_dot = INT32_MIN;
+        uint8_t direction;
+        uint8_t best_direction = 0u;
 
-    for (index = 1u; index < 4u; ++index) {
-        if (lung.sensor[index] < result) result = lung.sensor[index];
+        if (!creature->active) continue;
+        distance = creature_distance(creature);
+        if (distance > (fixed_t)PROXIMITY_DISPLAY_RANGE * FIXED_ONE) continue;
+        dx = creature->x - lung.x;
+        dy = creature->y - lung.y;
+        for (direction = 0u; direction < 4u; ++direction) {
+            uint8_t sensor_angle = (uint8_t)(angle + direction * 64u);
+            int32_t dot = (int32_t)fixed_mul(angle_sine(sensor_angle), dx) +
+                fixed_mul(angle_sine((uint8_t)(sensor_angle + 64u)), dy);
+            if (dot > best_dot) {
+                best_dot = dot;
+                best_direction = direction;
+            }
+        }
+        best_direction = (uint8_t)(best_direction * 4u);
+        if (distance < lung.sensor[best_direction]) {
+            lung.sensor[best_direction] = distance;
+        }
     }
-    return result;
 }
 
 static void set_message(uint8_t message, uint8_t ticks) {
@@ -430,6 +581,22 @@ static void set_message(uint8_t message, uint8_t ticks) {
 
 static void update_scripted_events(void) {
     uint8_t photos = documented_count();
+
+    if (photos >= 2u && (lung.event_flags & EVENT_BONE_FISH) == 0u) {
+        lung.event_flags |= EVENT_BONE_FISH;
+        creatures[0].phase = heading_angle();
+        set_message(MESSAGE_BONE_FISH, 120u);
+    }
+    if (photos >= 5u && (lung.event_flags & EVENT_BONE_EEL) == 0u) {
+        lung.event_flags |= EVENT_BONE_EEL;
+        creatures[1].phase = heading_angle();
+        set_message(MESSAGE_BONE_EEL, 120u);
+    }
+    if (photos >= 8u && (lung.event_flags & EVENT_BONE_MAW) == 0u) {
+        lung.event_flags |= EVENT_BONE_MAW;
+        creatures[2].phase = heading_angle();
+        set_message(MESSAGE_BONE_MAW, 120u);
+    }
 
     if (photos >= 4u && lung.x >= 532 * FIXED_ONE &&
         lung.x <= 550 * FIXED_ONE &&
@@ -441,8 +608,7 @@ static void update_scripted_events(void) {
         lung.y <= 330 * FIXED_ONE &&
         (lung.event_flags & EVENT_FISH_ONE) == 0u) {
         lung.event_flags |= EVENT_FISH_ONE;
-        lung.x = 576 * FIXED_ONE;
-        lung.y = 355 * FIXED_ONE;
+        set_navigation_position(576u, 355u);
         lung.pressure = 3u;
         lung.leak_level = 1u;
         set_message(MESSAGE_FISH_IMPACT, 120u);
@@ -458,8 +624,7 @@ static void update_scripted_events(void) {
         lung.y >= 570 * FIXED_ONE &&
         (lung.event_flags & EVENT_FISH_TWO) == 0u) {
         lung.event_flags |= EVENT_FISH_TWO;
-        lung.x = 276 * FIXED_ONE;
-        lung.y = 635 * FIXED_ONE;
+        set_navigation_position(276u, 635u);
         lung.pressure = 2u;
         lung.leak_level = 2u;
         lung.distortion = 2u;
@@ -495,27 +660,29 @@ static uint8_t update_navigation(
         changed = 1u;
     }
     if (throttle != 0) {
-        fixed_t travel = (fixed_t)(
-            ((int32_t)NAV_SPEED * elapsed_ticks) / ticks_per_second
+        int32_t travel = (int32_t)(
+            ((int32_t)(10 * NAV_ONE) * elapsed_ticks) / ticks_per_second
         );
         uint8_t angle = heading_angle();
+        int32_t candidate_precise_x;
+        int32_t candidate_precise_y;
         fixed_t candidate_x;
         fixed_t candidate_y;
 
         if (travel == 0) travel = 1;
-        candidate_x = lung.x + fixed_mul(
-            angle_sine(angle),
-            throttle * travel
-        );
-        candidate_y = lung.y + fixed_mul(
-            angle_sine((uint8_t)(angle + 64u)),
-            throttle * travel
-        );
+        candidate_precise_x = lung.precise_x +
+            (((int32_t)angle_sine(angle) * throttle * travel) >> FIXED_SHIFT);
+        candidate_precise_y = lung.precise_y +
+            (((int32_t)angle_sine((uint8_t)(angle + 64u)) * throttle * travel) >> FIXED_SHIFT);
+        candidate_x = precise_to_fixed(candidate_precise_x);
+        candidate_y = precise_to_fixed(candidate_precise_y);
         if (point_blocked(candidate_x, candidate_y)) {
             set_message(MESSAGE_HULL_CONTACT, 45u);
+            lung.view = VIEW_END;
         } else {
-            lung.x = candidate_x;
-            lung.y = candidate_y;
+            lung.precise_x = candidate_precise_x;
+            lung.precise_y = candidate_precise_y;
+            sync_navigation_position();
             lung.has_moved = 1u;
         }
         changed = 1u;
@@ -524,78 +691,36 @@ static uint8_t update_navigation(
     return changed;
 }
 
-static uint8_t station_in_reach(void) {
-    if (cabin_camera.position.y > 300 &&
-        angle_difference_u8(cabin_camera.yaw, 64u) < 42u) {
-        return STATION_HELM;
-    }
-    if (cabin_camera.position.y < -360 &&
-        angle_difference_u8(cabin_camera.yaw, 192u) < 48u) {
-        return cabin_camera.position.x < 160 ?
-            STATION_CAMERA : STATION_EXTINGUISHER;
-    }
-    return STATION_NONE;
-}
-
 static uint8_t sensor_color(fixed_t distance) {
-    if (distance <= 12 * FIXED_ONE) return UI_RED;
-    if (distance <= 35 * FIXED_ONE) return UI_ORANGE;
-    return UI_GREEN_DARK;
+    (void)distance;
+    return UI_WHITE;
 }
 
-static void draw_sensor_lamp(int16_t x, int16_t y, fixed_t distance) {
-    uint8_t color = sensor_color(distance);
+static void draw_radar_proximity(
+    int16_t x,
+    int16_t y,
+    fixed_t distance,
+    uint8_t index
+) {
+    uint8_t units = (uint8_t)(distance >> FIXED_SHIFT);
+    uint8_t period;
+    uint8_t pulse;
 
-    gfx_SetColor(UI_BLACK);
-    gfx_FillRectangle_NoClip(x, y, 13, 13);
-    gfx_SetColor(color);
-    gfx_Rectangle_NoClip(x, y, 13, 13);
-    if (distance <= 35 * FIXED_ONE && ((clock() >> 10) & 1u) != 0u) {
-        gfx_FillRectangle_NoClip(x + 3, y + 3, 7, 7);
+    if (units > SENSOR_MAX_UNITS) units = SENSOR_MAX_UNITS;
+    /* Clear ocean is completely silent on the helm: don't even leave an
+       outline until a wall enters the close-range proximity envelope. */
+    if (units > PROXIMITY_DISPLAY_RANGE) return;
+    /* Fewer clock ticks per period as a wall gets closer = faster blink. */
+    period = (uint8_t)(2u + units / 7u);
+    pulse = (uint8_t)(((uint24_t)clock() >> 8) + index * 5u) % period;
+    gfx_SetColor(sensor_color(distance));
+    if (units <= SENSOR_STEP / FIXED_ONE && point_blocked(lung.x, lung.y)) {
+        /* The hull is touching the wall: hold the marker solid. */
+        gfx_FillCircle_NoClip(x, y, 5);
+    } else if (pulse == 0u) {
+        gfx_Circle_NoClip(x, y, 6);
+        gfx_FillCircle_NoClip(x, y, units <= 12u ? 5 : 3);
     }
-}
-
-/* The helm readout is shown only after the player physically engages the
- * world-space console.  It never slides with yaw, so every NoClip coordinate
- * is a fixed, verified on-screen value. */
-static void draw_helm_readout(void) {
-    gfx_SetColor(UI_BROWN_DARK);
-    gfx_FillRectangle_NoClip(18, 132, 284, 84);
-    gfx_SetColor(UI_RUST_LIGHT);
-    gfx_Rectangle_NoClip(18, 132, 284, 84);
-    gfx_SetColor(UI_BLACK);
-    gfx_FillRectangle_NoClip(29, 143, 91, 25);
-    gfx_FillRectangle_NoClip(127, 143, 91, 25);
-    gfx_FillRectangle_NoClip(225, 143, 66, 25);
-
-    set_text(UI_GREEN, 35, 150);
-    gfx_PrintString("X ");
-    print_fixed_hundredths(lung.x);
-    set_text(UI_GREEN, 133, 150);
-    gfx_PrintString("Y ");
-    print_fixed_hundredths(lung.y);
-    set_text(UI_GREEN, 231, 150);
-    gfx_PrintString("A ");
-    print_heading();
-
-    draw_sensor_lamp(36, 180, lung.sensor[0]);
-    draw_sensor_lamp(57, 180, lung.sensor[1]);
-    draw_sensor_lamp(78, 180, lung.sensor[2]);
-    draw_sensor_lamp(99, 180, lung.sensor[3]);
-    set_text(UI_RUST_LIGHT, 34, 198);
-    gfx_PrintString("F  R  B  L");
-
-    set_text(lung.waypoint_active ? UI_GREEN : UI_RUST_LIGHT, 137, 181);
-    if (lung.waypoint_active) {
-        gfx_PrintString("WAYPOINT X");
-        gfx_PrintUInt(lung.waypoint_x, 1u);
-        gfx_PrintString(" Y");
-        gfx_PrintUInt(lung.waypoint_y, 1u);
-    } else {
-        gfx_PrintString("GRAPH: SET WAYPOINT");
-    }
-    set_text(UI_WHITE, 137, 199);
-    gfx_PrintString("ARROWS: THRUST / TURN");
 }
 
 static void draw_fire_and_leaks(void) {
@@ -637,51 +762,117 @@ static const char *message_text(uint8_t message) {
         case MESSAGE_PHOTO_VALID: return "SURVEY IMAGE ACCEPTED";
         case MESSAGE_PHOTO_INVALID: return "NO MARKED SUBJECT";
         case MESSAGE_FIRE_OUT: return "FIRE SUPPRESSED";
+        case MESSAGE_BONE_FISH: return "MOVEMENT: EXPOSED BONE STRUCTURE";
+        case MESSAGE_BONE_EEL: return "LONG SKELETAL RETURN CIRCLING";
+        case MESSAGE_BONE_MAW: return "LARGE DENTAL MASS APPROACHING";
+        case MESSAGE_BONE_PHOTO: return "MOVING SKELETON PHOTOGRAPHED";
         default: return "";
     }
 }
 
-static void draw_cabin_prompt(void) {
-    uint8_t station = station_in_reach();
-
+static void draw_meter(
+    int16_t x,
+    int16_t y,
+    const char *label,
+    uint8_t value,
+    uint8_t color
+) {
     gfx_SetColor(UI_BLACK);
-    gfx_FillRectangle_NoClip(0, 218, GFX_LCD_WIDTH, 22);
-    gfx_SetColor(nearest_sensor() <= 12 * FIXED_ONE ? UI_RED : UI_RUST_LIGHT);
-    gfx_HorizLine_NoClip(0, 217, GFX_LCD_WIDTH);
-    set_text(UI_WHITE, 7, 225);
-    if (lung.message_ticks != 0u) {
-        gfx_PrintString(message_text(lung.message));
-    } else if (lung.helm_active) {
-        gfx_PrintString("ARROWS PILOT  2ND EXIT  GRAPH MAP");
-    } else if (station == STATION_HELM) {
-        gfx_PrintString("2ND: OPERATE NAVIGATION CONTROLS");
-    } else if (station == STATION_CAMERA) {
-        gfx_PrintString("2ND: ACTIVATE EXTERNAL CAMERA");
-    } else if (station == STATION_EXTINGUISHER && lung.fire_level != 0u) {
-        gfx_PrintString("2ND: DISCHARGE EXTINGUISHER");
-    } else {
-        gfx_PrintString("ARROWS WALK/TURN   2ND USE   GRAPH MAP");
-    }
+    gfx_FillRectangle_NoClip(x, y, 27, 116);
+    gfx_SetColor(UI_RUST_LIGHT);
+    gfx_Rectangle_NoClip(x, y, 27, 116);
+    gfx_SetColor(color);
+    gfx_FillRectangle_NoClip(x + 6, y + 18 + (80 - value * 80 / 100u),
+        15, value * 80 / 100u);
+    set_text(UI_WHITE, x + 3, y + 4);
+    gfx_PrintString(label);
+    set_text(UI_GREEN, x + 4, y + 101);
+    gfx_PrintUInt(value, 2u);
 }
 
+/* This is the normal submarine view.  It intentionally draws no 3D frame:
+   one-shot 3D is reserved for the camera and the trace-key debug view. */
 static void draw_cabin(void) {
-    clock_t render_start = clock();
-    uint24_t render_ticks;
+    uint8_t angle = heading_angle();
+    int16_t pointer_x = (int16_t)(160 +
+        (angle_sine(angle) * 42 >> FIXED_SHIFT));
+    int16_t pointer_y = (int16_t)(112 -
+        (angle_sine((uint8_t)(angle + 64u)) * 42 >> FIXED_SHIFT));
+    uint8_t depth = (uint8_t)(20u +
+        ((uint32_t)(lung.precise_y >> NAV_SHIFT) * 70u / MAP_LIMIT));
+    uint8_t index;
+    uint8_t heading_slot;
+    int16_t radar_x[16];
+    int16_t radar_y[16];
 
-    ti_lung_engine_invalidate();
-    engine_render(&cabin_camera, displayed_fps_tenths);
-    if (lung.helm_active) draw_helm_readout();
-    draw_fire_and_leaks();
-    draw_cabin_prompt();
-    gfx_SwapDraw();
-
-    render_ticks = (uint24_t)(clock() - render_start);
-    if (render_ticks != 0u) {
-        uint32_t measured = ((uint32_t)CLOCKS_PER_SEC * 10u) / render_ticks;
-
-        if (measured > 9999u) measured = 9999u;
-        displayed_fps_tenths = (uint16_t)measured;
+    gfx_FillScreen(UI_BLACK);
+    gfx_SetColor(UI_RUST);
+    gfx_FillRectangle_NoClip(8, 8, 304, 224);
+    gfx_SetColor(UI_RUST_LIGHT);
+    gfx_Rectangle_NoClip(8, 8, 304, 224);
+    gfx_SetColor(UI_BROWN_DARK);
+    gfx_FillRectangle_NoClip(42, 21, 236, 181);
+    gfx_SetColor(UI_BLACK);
+    gfx_FillCircle_NoClip(160, 112, 54);
+    gfx_SetColor(UI_RUST_LIGHT);
+    for (index = 0u; index < 16u; ++index) {
+        uint8_t radar_angle = (uint8_t)(index * 16u);
+        radar_x[index] = (int16_t)(160 +
+            (angle_sine(radar_angle) * 45 >> FIXED_SHIFT));
+        radar_y[index] = (int16_t)(112 -
+            (angle_sine((uint8_t)(radar_angle + 64u)) * 45 >> FIXED_SHIFT));
     }
+    for (index = 0u; index < 16u; ++index) {
+        uint8_t next = (uint8_t)((index + 1u) & 15u);
+        gfx_Line_NoClip(radar_x[index], radar_y[index], radar_x[next], radar_y[next]);
+    }
+    gfx_SetColor(UI_GREEN);
+    gfx_Line_NoClip(160, 112, pointer_x, pointer_y);
+    gfx_FillCircle_NoClip(160, 112, 4);
+    set_text(UI_GREEN, 135, 27);
+    gfx_PrintString("HEADING");
+    set_text(UI_WHITE, 140, 43);
+    print_heading();
+
+    draw_meter(15, 39, "O2", (uint8_t)(lung.oxygen * 25u), UI_GREEN);
+    draw_meter(278, 39, "DEP", depth, depth > 75u ? UI_RED : UI_GREEN);
+    /* Compact, instrument-style coordinate readout. */
+    gfx_SetColor(UI_BLACK);
+    gfx_FillRectangle_NoClip(82, 163, 156, 38);
+    gfx_SetColor(UI_RUST_LIGHT);
+    gfx_Rectangle_NoClip(82, 163, 156, 38);
+    gfx_HorizLine_NoClip(87, 182, 146);
+    gfx_SetColor(UI_BROWN_DARK);
+    gfx_FillRectangle_NoClip(87, 167, 19, 11);
+    gfx_FillRectangle_NoClip(87, 186, 19, 11);
+    set_text(UI_WHITE, 93, 168);
+    gfx_PrintString("X");
+    set_text(UI_GREEN, 112, 168);
+    print_precise_hundredths(lung.precise_x);
+    set_text(UI_WHITE, 93, 187);
+    gfx_PrintString("Y");
+    set_text(UI_GREEN, 112, 187);
+    print_precise_hundredths(lung.precise_y);
+    /* The ring stays bolted to the helm, while front/right/rear/left move to
+       the four slots matching the submarine's quantized 45-degree heading. */
+    heading_slot = (uint8_t)((((uint8_t)(angle + 16u) >> 5) * 2u) & 15u);
+    for (index = 0u; index < 4u; ++index) {
+        uint8_t sensor_index = (uint8_t)(index * 4u);
+        uint8_t radar_index = (uint8_t)((heading_slot + sensor_index) & 15u);
+        draw_radar_proximity(radar_x[radar_index], radar_y[radar_index],
+            lung.sensor[sensor_index], radar_index);
+    }
+
+    gfx_SetColor(UI_BLACK);
+    gfx_FillRectangle_NoClip(10, 205, 300, 21);
+    set_text(lung.message_ticks != 0u ? UI_RED : UI_WHITE, 15, 212);
+    if (lung.message_ticks != 0u) {
+        gfx_PrintString(message_text(lung.message));
+    } else {
+        gfx_PrintString("ARROWS PILOT  2ND PHOTO  GRAPH MAP  TRACE 3D");
+    }
+    draw_fire_and_leaks();
+    gfx_SwapDraw();
 }
 
 static int16_t map_x(uint16_t coordinate) {
@@ -692,21 +883,46 @@ static int16_t map_y(uint16_t coordinate) {
     return (int16_t)(210 - ((uint24_t)coordinate * 180u) / MAP_LIMIT);
 }
 
+static uint8_t map_target_index(void) {
+    uint8_t index;
+    uint8_t result = 0u;
+    uint32_t best = UINT32_MAX;
+
+    for (index = 0u; index < 10u; ++index) {
+        int32_t dx = (int32_t)lung.map_cursor_x -
+            (photo_points[index].x >> FIXED_SHIFT);
+        int32_t dy = (int32_t)lung.map_cursor_y -
+            (photo_points[index].y >> FIXED_SHIFT);
+        uint32_t distance = (uint32_t)(dx * dx + dy * dy);
+
+        if (distance < best) {
+            best = distance;
+            result = index;
+        }
+    }
+    return result;
+}
+
 static void draw_map(void) {
     uint8_t x;
     uint8_t y;
     uint8_t index;
+    uint8_t target = map_target_index();
+    uint8_t target_angle = (uint8_t)(
+        ((uint32_t)photo_points[target].heading_cdeg * 256u) / 36000u
+    );
 
     gfx_FillScreen(UI_BLACK);
     gfx_SetColor(UI_PAPER_DARK);
     gfx_FillRectangle_NoClip(13, 18, 294, 201);
-    gfx_SetColor(UI_PAPER);
+    /* The uncarved area is a black wall; only safe cave water is charted. */
+    gfx_SetColor(UI_BLACK);
     gfx_FillRectangle_NoClip(20, 24, 280, 192);
 
     for (y = 0u; y < CAVE_SIZE; ++y) {
         for (x = 0u; x < CAVE_SIZE; ++x) {
             if (cave_cell_open(x, y)) {
-                gfx_SetColor(((x + y) & 3u) == 0u ? UI_VOID : UI_CEILING);
+                gfx_SetColor(((x + y) & 3u) == 0u ? UI_PAPER_DARK : UI_PAPER);
                 gfx_FillRectangle_NoClip(
                     20 + (int16_t)((uint16_t)x * 280u / CAVE_SIZE),
                     24 + (int16_t)((uint16_t)(CAVE_SIZE - 1u - y) *
@@ -743,8 +959,8 @@ static void draw_map(void) {
         }
     }
     {
-        int16_t submarine_x = map_x((uint16_t)(lung.x >> FIXED_SHIFT));
-        int16_t submarine_y = map_y((uint16_t)(lung.y >> FIXED_SHIFT));
+        int16_t submarine_x = map_x((uint16_t)(lung.precise_x >> NAV_SHIFT));
+        int16_t submarine_y = map_y((uint16_t)(lung.precise_y >> NAV_SHIFT));
         int16_t cursor_x = map_x(lung.map_cursor_x);
         int16_t cursor_y = map_y(lung.map_cursor_y);
 
@@ -757,22 +973,36 @@ static void draw_map(void) {
     }
 
     gfx_SetColor(UI_BLACK);
-    gfx_FillRectangle_NoClip(0, 0, 320, 17);
+    gfx_FillRectangle_NoClip(0, 0, 320, 23);
     gfx_FillRectangle_NoClip(0, 220, 320, 20);
     set_text(UI_WHITE, 1, 5);
-    gfx_PrintString("AT-5  ARROWS MOVE  2ND SET  GRAPH OUT");
+    gfx_PrintString("AT-5 MAP  ARROWS CURSOR  2ND WAYPOINT  GRAPH OUT");
+    set_text(UI_GREEN, 6, 14);
+    gfx_PrintString("OBJ ");
+    gfx_PrintUInt(target + 1u, 2u);
+    gfx_PrintString(" X");
+    gfx_PrintUInt((uint16_t)(photo_points[target].x >> FIXED_SHIFT), 1u);
+    gfx_PrintString(" Y");
+    gfx_PrintUInt((uint16_t)(photo_points[target].y >> FIXED_SHIFT), 1u);
+    gfx_PrintString(" A");
+    print_heading_value(photo_points[target].heading_cdeg);
     set_text(UI_GREEN, 7, 226);
     gfx_PrintString("SUB ");
-    gfx_PrintUInt((uint16_t)(lung.x >> FIXED_SHIFT), 1u);
+    gfx_PrintUInt((uint16_t)(lung.precise_x >> NAV_SHIFT), 1u);
     gfx_PrintString(",");
-    gfx_PrintUInt((uint16_t)(lung.y >> FIXED_SHIFT), 1u);
+    gfx_PrintUInt((uint16_t)(lung.precise_y >> NAV_SHIFT), 1u);
     set_text(UI_WHITE, 112, 226);
     gfx_PrintString("CUR ");
     gfx_PrintUInt(lung.map_cursor_x, 1u);
     gfx_PrintString(",");
     gfx_PrintUInt(lung.map_cursor_y, 1u);
     set_text(UI_GREEN, 232, 226);
-    gfx_PrintString("2ND SET");
+    gfx_PrintString("A ");
+    print_heading();
+    gfx_SetColor(UI_GREEN);
+    gfx_Line_NoClip(299, 37, (int16_t)(299 +
+        (angle_sine(target_angle) * 10 >> FIXED_SHIFT)),
+        (int16_t)(37 - (angle_sine((uint8_t)(target_angle + 64u)) * 10 >> FIXED_SHIFT)));
     gfx_SwapDraw();
 }
 
@@ -841,76 +1071,66 @@ static uint8_t valid_photo_point(void) {
     return 0xFFu;
 }
 
+static uint8_t visible_creature(void) {
+    uint8_t index;
+    uint8_t result = 0xFFu;
+    fixed_t nearest = SENSOR_RANGE * 2;
+    uint8_t angle = heading_angle();
+    fixed_t forward_x = angle_sine(angle);
+    fixed_t forward_y = angle_sine((uint8_t)(angle + 64u));
+    fixed_t right_x = forward_y;
+    fixed_t right_y = -forward_x;
+
+    for (index = 0u; index < 3u; ++index) {
+        const SkeletalCreature *creature = &creatures[index];
+        fixed_t dx;
+        fixed_t dy;
+        fixed_t forward;
+        fixed_t side;
+
+        if (!creature->active) continue;
+        dx = creature->x - lung.x;
+        dy = creature->y - lung.y;
+        forward = fixed_mul(forward_x, dx) + fixed_mul(forward_y, dy);
+        side = fixed_mul(right_x, dx) + fixed_mul(right_y, dy);
+        if (forward <= 4 * FIXED_ONE || forward >= nearest ||
+            fixed_absolute(side) > forward) continue;
+        nearest = forward;
+        result = index;
+    }
+    return result;
+}
+
 /* The external image is deliberately a bounded photographic projection, not
    another live 3D room.  Its vanishing point and cave throat come from the
    four proximity rays, while the rock grain is seeded by coordinates and
    heading.  This preserves the game's separate "camera reality" and avoids
    making the tiny calculator render an unbounded exterior scene. */
 static void draw_photo_environment(uint8_t scene) {
-    uint8_t front = (uint8_t)(lung.sensor[0] >> FIXED_SHIFT);
-    uint8_t right = (uint8_t)(lung.sensor[1] >> FIXED_SHIFT);
-    uint8_t left = (uint8_t)(lung.sensor[3] >> FIXED_SHIFT);
-    int16_t vanishing_x;
-    int16_t throat;
     uint16_t seed = (uint16_t)(
         (lung.x >> 3) ^ (lung.y >> 2) ^ lung.heading_cdeg ^
         ((uint16_t)scene << 11)
     );
-    uint8_t band;
-
-    if (front > SENSOR_MAX_UNITS) front = SENSOR_MAX_UNITS;
-    if (right > SENSOR_MAX_UNITS) right = SENSOR_MAX_UNITS;
-    if (left > SENSOR_MAX_UNITS) left = SENSOR_MAX_UNITS;
-    vanishing_x = 160 + (int16_t)right - (int16_t)left;
-    if (vanishing_x < 125) vanishing_x = 125;
-    if (vanishing_x > 195) vanishing_x = 195;
-    throat = 18 + front;
-    if (throat > 63) throat = 63;
+    uint16_t index;
 
     gfx_FillScreen(PHOTO_BLACK);
-    gfx_SetColor(PHOTO_DARK);
-    gfx_FillTriangle_NoClip(24, 24, vanishing_x - throat, 111,
-                            24, 204);
-    gfx_FillTriangle_NoClip(296, 24, vanishing_x + throat, 111,
-                            296, 204);
-    gfx_SetColor(PHOTO_MID);
-    gfx_FillTriangle_NoClip(24, 24, 296, 24,
-                            vanishing_x, 111 - throat / 2);
-    gfx_SetColor(PHOTO_DARK);
-    gfx_FillTriangle_NoClip(24, 204, 296, 204,
-                            vanishing_x, 111 + throat / 2);
-
-    /* Receding seams make distance legible in the developed still. */
-    for (band = 1u; band <= 6u; ++band) {
-        int16_t inset = band * 18;
-        int16_t top = 24 + band * 12;
-        int16_t bottom = 204 - band * 12;
-        int16_t left_edge = 24 + inset;
-        int16_t right_edge = 296 - inset;
-
-        gfx_SetColor((band & 1u) != 0u ? PHOTO_MID : PHOTO_DARK);
-        gfx_Line_NoClip(left_edge, top, vanishing_x - throat, 111);
-        gfx_Line_NoClip(right_edge, top, vanishing_x + throat, 111);
-        gfx_HorizLine_NoClip(left_edge, top,
-            (uint16_t)(right_edge - left_edge));
-        gfx_HorizLine_NoClip(left_edge, bottom,
-            (uint16_t)(right_edge - left_edge));
+    /* Dense, low-contrast ocean noise leaves the feed nearly black, like an
+       overloaded monochrome camera rather than a corridor or room. */
+    for (index = 0u; index < 2400u; ++index) {
+        seed = (uint16_t)(seed * 25173u + 13849u);
+        gfx_SetColor((seed & 7u) == 0u ? PHOTO_MID : PHOTO_DARK);
+        {
+            int16_t x = (int16_t)(25 + seed % 270u);
+            int16_t y;
+            seed = (uint16_t)(seed * 25173u + 13849u);
+            y = (int16_t)(25 + (seed >> 8) % 178u);
+            gfx_SetPixel(x, y);
+        }
     }
-
-    /* Coordinate-stable stone silhouettes make two photographs taken at
-       different map positions visibly different. */
-    for (band = 0u; band < 11u; ++band) {
-        int16_t x;
-        int16_t y;
-        uint8_t radius;
-
+    for (index = 0u; index < 14u; ++index) {
         seed = (uint16_t)(seed * 25173u + 13849u);
-        x = (int16_t)(30 + seed % 260u);
-        seed = (uint16_t)(seed * 25173u + 13849u);
-        y = (int16_t)(36 + seed % 154u);
-        radius = (uint8_t)(4u + (seed >> 12));
-        gfx_SetColor((band & 2u) != 0u ? PHOTO_MID : PHOTO_DARK);
-        gfx_FillCircle_NoClip(x, y, radius);
+        gfx_SetColor(PHOTO_DARK);
+        gfx_HorizLine_NoClip(25, (uint8_t)(30 + seed % 166u), 270);
     }
 }
 
@@ -918,94 +1138,151 @@ static void draw_photo_scene(uint8_t scene) {
     uint8_t index;
 
     gfx_SetColor(PHOTO_LIGHT);
-    switch (scene) {
+    switch (scene % 5u) {
         case 0u:
-            for (index = 0u; index < 7u; ++index) {
-                gfx_Line_NoClip(88 + index * 20, 172,
-                                106 + index * 16, 72 + (index & 1u) * 20);
-                gfx_Line_NoClip(91 + index * 20, 172,
-                                109 + index * 16, 72 + (index & 1u) * 20);
+            /* Curled vertebrae and ribs. */
+            for (index = 0u; index < 12u; ++index) {
+                int16_t x = 68 + index * 15;
+                int16_t y = 110 + (index < 6u ? index * 6 : (11u - index) * 6);
+                gfx_FillCircle_NoClip(x, y, 8);
+                gfx_SetColor(PHOTO_BLACK);
+                gfx_FillCircle_NoClip(x, y, 3);
+                gfx_SetColor(PHOTO_LIGHT);
+                gfx_Line_NoClip(x, y, x - 18, y + 24);
+                gfx_Line_NoClip(x + 3, y + 2, x + 25, y + 21);
             }
             break;
         case 1u:
-            for (index = 0u; index < 5u; ++index) {
-                gfx_FillRectangle_NoClip(60 + index * 45,
-                    70 + (index & 1u) * 18, 17, 112 - (index & 1u) * 18);
-            }
-            gfx_HorizLine_NoClip(50, 67, 230);
-            break;
-        case 2u:
-            for (index = 0u; index < 9u; ++index) {
-                gfx_Line_NoClip(160, 177, 55 + index * 27,
-                    55 + ((index * 31u) % 80u));
-            }
-            gfx_FillCircle_NoClip(160, 176, 16);
-            break;
-        case 3u:
-            gfx_Rectangle_NoClip(79, 54, 163, 129);
-            gfx_Rectangle_NoClip(100, 74, 121, 91);
-            for (index = 0u; index < 4u; ++index) {
-                gfx_VertLine_NoClip(121 + index * 25, 75, 89);
-            }
-            break;
-        case 4u:
-            gfx_Line_NoClip(58, 176, 157, 62);
-            gfx_Line_NoClip(262, 176, 157, 62);
-            for (index = 0u; index < 7u; ++index) {
-                gfx_Line_NoClip(88 + index * 24, 150,
-                    157, 70 + index * 8);
-            }
-            break;
-        case 5u:
-            for (index = 0u; index < 6u; ++index) {
-                gfx_FillRectangle_NoClip(46 + index * 46, 92, 22, 89);
-                gfx_Rectangle_NoClip(39 + index * 46, 82, 36, 99);
-            }
-            break;
-        case 6u:
-            gfx_FillCircle_NoClip(160, 112, 34);
-            gfx_SetColor(PHOTO_WHITE);
-            gfx_FillCircle_NoClip(160, 112, 16);
+            /* A broad rib cage around a dark central cavity. */
+            gfx_FillCircle_NoClip(160, 119, 37);
+            gfx_SetColor(PHOTO_BLACK);
+            gfx_FillCircle_NoClip(160, 119, 24);
             gfx_SetColor(PHOTO_LIGHT);
             for (index = 0u; index < 8u; ++index) {
-                gfx_Line_NoClip(160, 112, 50 + index * 32,
-                    52 + ((index * 43u) % 128u));
+                int16_t y = 67 + index * 15;
+                gfx_Line_NoClip(151, 112, 64 + index * 8, y);
+                gfx_Line_NoClip(169, 112, 256 - index * 8, y);
+                gfx_Line_NoClip(64 + index * 8, y, 84 + index * 8, y + 8);
+                gfx_Line_NoClip(256 - index * 8, y, 236 - index * 8, y + 8);
             }
             break;
-        case 7u:
-            gfx_Rectangle_NoClip(46, 51, 230, 134);
-            for (index = 0u; index < 7u; ++index) {
-                gfx_HorizLine_NoClip(46, 51 + index * 20, 230);
+        case 2u:
+            /* Branching claws reaching out of the darkness. */
+            for (index = 0u; index < 6u; ++index) {
+                int16_t x = 48 + index * 43;
+                int16_t y = 166 - (index & 1u) * 22;
+                gfx_Line_NoClip(160, 105, x, y);
+                gfx_Line_NoClip(x, y, x - 15, y - 34);
+                gfx_Line_NoClip(x, y, x + 17, y - 29);
+                gfx_FillCircle_NoClip(x, y, 5);
             }
+            break;
+        case 3u:
+            /* Distant, leaning monoliths with broken antennae. */
+            for (index = 0u; index < 5u; ++index) {
+                int16_t x = 62 + index * 48;
+                int16_t top = 55 + ((index * 23u) % 54u);
+                gfx_Line_NoClip(x, 177, x + 20, top);
+                gfx_Line_NoClip(x + 8, 177, x + 31, top + 10);
+                gfx_Line_NoClip(x + 20, top, x + 38, top - 18);
+            }
+            break;
+        default: /* Tangled skeletal arches. */
             for (index = 0u; index < 9u; ++index) {
-                gfx_VertLine_NoClip(46 + index * 28,
-                    51 + (index & 1u) * 10, 124);
+                int16_t x = 52 + index * 28;
+                gfx_Line_NoClip(x, 174, x + 23, 64 + (index & 1u) * 25);
+                gfx_Line_NoClip(x + 6, 174, x + 31, 75 + (index & 1u) * 24);
+                gfx_Line_NoClip(x + 14, 150, x + 38, 136);
             }
             break;
-        case 8u:
-            gfx_Line_NoClip(65, 178, 101, 72);
-            gfx_Line_NoClip(101, 72, 132, 178);
-            gfx_Line_NoClip(132, 178, 166, 61);
-            gfx_Line_NoClip(166, 61, 205, 178);
-            gfx_Line_NoClip(205, 178, 236, 83);
-            break;
-        case 9u:
-            gfx_Rectangle_NoClip(64, 58, 192, 121);
-            gfx_Rectangle_NoClip(83, 76, 154, 86);
-            gfx_FillRectangle_NoClip(150, 77, 20, 84);
-            break;
-        case 10u:
-            gfx_SetColor(PHOTO_WHITE);
-            gfx_FillCircle_NoClip(160, 111, 63);
-            gfx_SetColor(PHOTO_DARK);
-            gfx_FillCircle_NoClip(160, 111, 36);
-            gfx_SetColor(PHOTO_BLACK);
-            gfx_FillCircle_NoClip(160, 111, 16);
-            gfx_SetColor(PHOTO_LIGHT);
-            gfx_HorizLine_NoClip(97, 111, 126);
-            break;
-        default:
-            break;
+    }
+}
+
+static void draw_skeletal_creature_photo(
+    uint8_t kind, uint8_t animation_phase
+) {
+    uint8_t index;
+    int16_t sway = (int16_t)((animation_phase >> 4) & 3u) - 1;
+
+    gfx_SetColor(PHOTO_WHITE);
+    if (kind == 0u) {
+        /* A complete predatory fish: hollow skull, separated jaws, teeth,
+           linked vertebrae, paired ribs, and a shredded bony tail fan. */
+        gfx_Circle_NoClip(230, 102 + sway, 26);
+        gfx_Line_NoClip(208, 90 + sway, 246, 75 + sway);
+        gfx_Line_NoClip(246, 75 + sway, 269, 101 + sway);
+        gfx_Line_NoClip(269, 101 + sway, 207, 111 + sway);
+        gfx_Line_NoClip(207, 113 + sway, 266, 126 + sway);
+        gfx_Line_NoClip(266, 126 + sway, 213, 135 + sway);
+        gfx_SetColor(PHOTO_BLACK);
+        gfx_FillCircle_NoClip(239, 94 + sway, 8);
+        gfx_SetColor(PHOTO_WHITE);
+        for (index = 0u; index < 9u; ++index) {
+            int16_t x = 216 + index * 6;
+            gfx_Line_NoClip(x, 112 + sway, x + 2, 122 + sway);
+            gfx_Line_NoClip(x + 2, 129 + sway, x + 4, 119 + sway);
+        }
+        for (index = 0u; index < 11u; ++index) {
+            int16_t x = 194 - index * 12;
+            int16_t y = 109 + ((index + animation_phase / 16u) & 1u) * 3;
+            gfx_Circle_NoClip(x, y, 4);
+            gfx_Line_NoClip(x, y + 2, x - 5, y + 30);
+            gfx_Line_NoClip(x, y - 2, x - 3, y - 25);
+        }
+        gfx_Line_NoClip(65, 110, 34, 70);
+        gfx_Line_NoClip(65, 110, 30, 110);
+        gfx_Line_NoClip(65, 110, 35, 151);
+        gfx_Line_NoClip(35, 70, 30, 110);
+        gfx_Line_NoClip(30, 110, 35, 151);
+    } else if (kind == 1u) {
+        /* An eel skeleton bends across the frame. The repeated vertebrae and
+           long dorsal/ventral spines keep it readable through heavy grain. */
+        static const int8_t curve[16] = {
+            0, -9, -15, -18, -15, -8, 2, 12,
+            18, 16, 10, 0, -10, -16, -13, -4
+        };
+        for (index = 0u; index < 16u; ++index) {
+            int16_t x = 43 + index * 14;
+            int16_t y = 114 + curve[index] + sway;
+            gfx_Circle_NoClip(x, y, 4);
+            if (index != 15u) {
+                gfx_Line_NoClip(x + 3, y, x + 11,
+                    114 + curve[index + 1u] + sway);
+            }
+            gfx_Line_NoClip(x, y - 2, x - 5, y - 22 - (index & 3u) * 3);
+            gfx_Line_NoClip(x, y + 2, x + 4, y + 21 + (index & 3u) * 3);
+        }
+        gfx_Line_NoClip(250, 96 + sway, 286, 78 + sway);
+        gfx_Line_NoClip(286, 78 + sway, 296, 111 + sway);
+        gfx_Line_NoClip(296, 111 + sway, 252, 123 + sway);
+        gfx_Line_NoClip(252, 123 + sway, 291, 138 + sway);
+        gfx_SetColor(PHOTO_BLACK);
+        gfx_FillCircle_NoClip(277, 100 + sway, 7);
+        gfx_SetColor(PHOTO_WHITE);
+        for (index = 0u; index < 6u; ++index) {
+            gfx_Line_NoClip(259 + index * 5, 117 + sway,
+                261 + index * 5, 128 + sway);
+        }
+    } else {
+        /* The late-game organism is mostly skull and teeth, emerging from a
+           dark body large enough that the camera cannot find its edges. */
+        gfx_Circle_NoClip(160, 101 + sway, 61);
+        gfx_Circle_NoClip(160, 106 + sway, 56);
+        gfx_SetColor(PHOTO_BLACK);
+        gfx_FillCircle_NoClip(137, 91 + sway, 15);
+        gfx_FillCircle_NoClip(184, 91 + sway, 15);
+        gfx_FillCircle_NoClip(160, 113 + sway, 9);
+        gfx_FillRectangle_NoClip(99, 127 + sway, 123, 32);
+        gfx_SetColor(PHOTO_WHITE);
+        gfx_Line_NoClip(96, 126 + sway, 224, 126 + sway);
+        gfx_Line_NoClip(99, 177 + sway, 221, 177 + sway);
+        for (index = 0u; index < 13u; ++index) {
+            int16_t x = 102 + index * 10;
+            gfx_Line_NoClip(x, 126 + sway, x + 4, 158 + sway);
+            gfx_Line_NoClip(x + 4, 177 + sway, x + 8, 146 + sway);
+        }
+        gfx_Line_NoClip(99, 177 + sway, 82, 150 + sway);
+        gfx_Line_NoClip(221, 177 + sway, 238, 150 + sway);
     }
 }
 
@@ -1025,36 +1302,43 @@ static void draw_photo_noise(void) {
     }
 }
 
-static void draw_camera_charge(uint8_t stage) {
-    gfx_FillScreen(UI_BLACK);
-    gfx_SetColor(UI_RUST);
-    gfx_FillRectangle_NoClip(42, 42, 236, 144);
-    gfx_SetColor(UI_RUST_LIGHT);
-    gfx_Rectangle_NoClip(42, 42, 236, 144);
-    set_text(UI_GREEN, 88, 77);
-    gfx_PrintString("EXTERNAL CAMERA CYCLING");
-    gfx_SetColor(UI_BLACK);
-    gfx_FillRectangle_NoClip(72, 111, 176, 18);
-    gfx_SetColor(UI_GREEN);
-    gfx_FillRectangle_NoClip(76, 115, stage * 42, 10);
-    set_text(UI_WHITE, 101, 151);
-    gfx_PrintString("HOLD POSITION");
+static void draw_photo_flash(uint8_t color, uint8_t grain) {
+    uint16_t seed = (uint16_t)(0x331Du + grain * 911u);
+    uint8_t index;
+
+    gfx_FillScreen(color);
+    if (grain != 0u) {
+        for (index = 0u; index < grain * 35u; ++index) {
+            seed = (uint16_t)(seed * 25173u + 13849u);
+            gfx_SetColor((seed & 1u) != 0u ? PHOTO_LIGHT : PHOTO_DARK);
+            gfx_SetPixel(seed % GFX_LCD_WIDTH, (uint8_t)(seed >> 8));
+        }
+    }
     gfx_SwapDraw();
+    gfx_Wait();
+}
+
+static void set_photo_palette(void) {
+    uint8_t index;
+
+    /* T3D3's low-poly camera mesh has no material colors in a photograph. */
+    for (index = 0u; index < 68u; ++index) {
+        uint8_t intensity = (uint8_t)(18u + (index & 3u) * 55u);
+        gfx_palette[index] = gfx_RGBTo1555(intensity, intensity, intensity);
+    }
+    gfx_palette[UI_BLACK] = gfx_RGBTo1555(0, 0, 0);
 }
 
 static void capture_photo(void) {
     uint8_t target = valid_photo_point();
     uint8_t scene = target == 0xFFu ? 0xFFu : photo_points[target].scene;
-    uint8_t stage;
+    uint8_t creature = visible_creature();
 
-    for (stage = 1u; stage <= 4u; ++stage) {
-        volatile uint16_t camera_delay;
-
-        draw_camera_charge(stage);
-        /* A bounded hardware-speed pause cannot deadlock when an emulator's
-           real-time clock is paused during deterministic input playback. */
-        for (camera_delay = 0u; camera_delay < 9000u; ++camera_delay) { }
-    }
+    /* Flash -> pale grain -> darkness -> developed still. The 3D scene is
+       still rendered only once, after the flash has hidden the work. */
+    draw_photo_flash(UI_WHITE, 0u);
+    draw_photo_flash(PHOTO_LIGHT, 1u);
+    draw_photo_flash(PHOTO_DARK, 3u);
     ++lung.photo_count;
     if (target < 9u) {
         lung.documented_mask |= (uint16_t)(1u << target);
@@ -1069,10 +1353,24 @@ static void capture_photo(void) {
     } else {
         set_message(MESSAGE_PHOTO_INVALID, 60u);
     }
+    if (scene != 10u && creature != 0xFFu) {
+        set_message(MESSAGE_BONE_PHOTO, 90u);
+    }
     lung.last_scene = scene;
 
+    ti_lung_engine_invalidate();
+    gfx_FillScreen(PHOTO_BLACK);
+    set_photo_palette();
+    /* The camera is a low-light survey instrument, not the debug renderer.
+       Its developed still contains ocean grain and a detected subject only:
+       never room faces, chunk boxes, a floor, or a ceiling. */
     draw_photo_environment(scene);
-    draw_photo_scene(scene);
+    if (target != 0xFFu) draw_photo_scene(scene);
+    if (scene != 10u && creature != 0xFFu) {
+        draw_skeletal_creature_photo(
+            creatures[creature].kind, creatures[creature].phase
+        );
+    }
     draw_photo_noise();
 
     gfx_SetColor(UI_RUST);
@@ -1087,19 +1385,25 @@ static void capture_photo(void) {
     gfx_PrintUInt(lung.photo_count, lung.photo_count >= 10u ? 2u : 1u);
     set_text(UI_GREEN, 88, 7);
     gfx_PrintString("X");
-    print_fixed_hundredths(lung.x);
+    print_precise_hundredths(lung.precise_x);
     gfx_PrintString(" Y");
-    print_fixed_hundredths(lung.y);
+    print_precise_hundredths(lung.precise_y);
     gfx_PrintString(" A");
     print_heading();
     set_text(target < 9u ? UI_GREEN : UI_WHITE, 7, 215);
-    gfx_PrintString(target < 9u ?
-        "MARKED SITE RECORDED" :
-        (scene == 10u ? "UNIDENTIFIED ORGANISM" : "NO MARKED SUBJECT"));
+    if (scene == 10u) {
+        gfx_PrintString("UNIDENTIFIED ORGANISM");
+    } else if (creature != 0xFFu) {
+        gfx_PrintString("MOVING SKELETAL RETURN");
+    } else {
+        gfx_PrintString(target < 9u ?
+            "MARKED SITE RECORDED" : "NO MARKED SUBJECT");
+    }
     set_text(UI_WHITE, 232, 227);
     gfx_PrintString("2ND RETURN");
     gfx_SwapDraw();
     lung.view = VIEW_PHOTO;
+    lung.photo_ticks = 0u;
 }
 
 static void draw_attack(void) {
@@ -1132,11 +1436,13 @@ static void draw_end(void) {
     gfx_PrintString("TI LUNG");
     gfx_SetTextScale(1, 1);
     set_text(UI_WHITE, 52, 114);
-    gfx_PrintString("SM-13 TELEMETRY TERMINATED");
+    gfx_PrintString("HULL CONTACT: TELEMETRY LOST");
     set_text(UI_RUST_LIGHT, 40, 139);
     gfx_PrintString("NO RECOVERY METHOD IS AVAILABLE.");
     set_text(UI_GREEN, 75, 178);
-    gfx_PrintString("SURVEY RECORD: 9 / 10");
+    gfx_PrintString("SURVEY RECORD: ");
+    gfx_PrintUInt(documented_count(), 1u);
+    gfx_PrintString(" / 10");
     set_text(UI_WHITE, 110, 216);
     gfx_PrintString("CLEAR TO EXIT");
     gfx_SwapDraw();
@@ -1149,6 +1455,7 @@ static void draw_current_view(void) {
         case VIEW_PHOTO: break;
         case VIEW_ATTACK: draw_attack(); break;
         case VIEW_END: draw_end(); break;
+        case VIEW_DEBUG: draw_debug_view(); break;
         default: draw_cabin(); break;
     }
 }
@@ -1157,17 +1464,9 @@ static uint8_t read_edge_keys(void) {
     return (uint8_t)(
         ((kb_Data[1] & kb_2nd) != 0u ? EDGE_USE : 0u) |
         ((kb_Data[1] & kb_Graph) != 0u ? EDGE_MAP : 0u) |
-        ((kb_Data[1] & kb_Mode) != 0u ? EDGE_BRIEFING : 0u)
+        ((kb_Data[1] & kb_Mode) != 0u ? EDGE_BRIEFING : 0u) |
+        ((kb_Data[1] & kb_Trace) != 0u ? EDGE_DEBUG : 0u)
     );
-}
-
-static void extinguish_fire(void) {
-    if (lung.fire_level == 0u) return;
-    lung.fire_level = lung.fire_level > 25u ? lung.fire_level - 25u : 0u;
-    if (lung.fire_level == 0u) {
-        lung.hazard_ticks = 0u;
-        set_message(MESSAGE_FIRE_OUT, 90u);
-    }
 }
 
 static void begin_final_attack(void) {
@@ -1179,33 +1478,65 @@ static void begin_final_attack(void) {
 }
 
 static void use_station(void) {
-    uint8_t station;
+    if (valid_photo_point() == 9u && documented_count() >= 9u) {
+        begin_final_attack();
+    } else {
+        capture_photo();
+    }
+}
 
-    if (lung.helm_active) {
-        lung.helm_active = 0u;
-        return;
+static uint8_t load_saved_game(LungState *destination) {
+    LungSave save;
+    uint8_t handle = ti_Open(SAVE_NAME, "r");
+
+    if (handle == 0u) return 0u;
+    if (ti_Read(&save, sizeof(save), 1u, handle) != 1u) {
+        ti_Close(handle);
+        return 0u;
     }
-    station = station_in_reach();
-    if (station == STATION_HELM) {
-        lung.helm_active = 1u;
-        cabin_camera.position = (Vec3){0, 560, 384};
-        cabin_camera.velocity = (Vec3){0, 0, 0};
-        cabin_camera.yaw = 64u;
-        cabin_camera.pitch = 0;
-        rebuild_basis(&cabin_camera);
-    } else if (station == STATION_CAMERA) {
-        if (valid_photo_point() == 9u && documented_count() >= 9u) {
-            begin_final_attack();
-        } else {
-            capture_photo();
-        }
-    } else if (station == STATION_EXTINGUISHER) {
-        extinguish_fire();
+    ti_Close(handle);
+    if (save.magic != SAVE_MAGIC || save.version != SAVE_VERSION) return 0u;
+    *destination = save.state;
+    destination->view = VIEW_CABIN;
+    destination->previous_edge_keys = 0u;
+    destination->photo_ticks = 0u;
+    destination->autosave_ticks = 0u;
+    destination->x = precise_to_fixed(destination->precise_x);
+    destination->y = precise_to_fixed(destination->precise_y);
+    return 1u;
+}
+
+static uint8_t save_current_game(void) {
+    LungSave save;
+    uint8_t handle;
+
+    save.magic = SAVE_MAGIC;
+    save.version = SAVE_VERSION;
+    save.state = lung;
+    save.state.view = VIEW_CABIN;
+    save.state.previous_edge_keys = 0u;
+    handle = ti_Open(SAVE_NAME, "w");
+    if (handle == 0u) return 0u;
+    if (ti_Resize(sizeof(save), handle) != (int)sizeof(save)) {
+        ti_Close(handle);
+        return 0u;
     }
+    if (ti_Write(&save, sizeof(save), 1u, handle) != 1u) {
+        ti_Close(handle);
+        return 0u;
+    }
+    ti_Close(handle);
+    return 1u;
+}
+
+static uint8_t saved_game_available(void) {
+    LungState saved;
+    return load_saved_game(&saved);
 }
 
 static uint8_t wait_for_deploy(void) {
     uint8_t previous = 0u;
+    uint8_t saved = saved_game_available();
 
     gfx_FillScreen(UI_BLACK);
     gfx_SetColor(UI_RUST);
@@ -1217,11 +1548,11 @@ static uint8_t wait_for_deploy(void) {
     set_text(UI_WHITE, 78, 88);
     gfx_PrintString("SM-13 BLOOD OCEAN SURVEY");
     set_text(UI_RUST_LIGHT, 54, 115);
-    gfx_PrintString("ONE CABIN. TEN PHOTOGRAPHS.");
+    gfx_PrintString("ONE SUB. TEN PHOTOGRAPHS.");
     set_text(UI_RED, 72, 145);
     gfx_PrintString("THE HATCH WILL BE WELDED.");
     set_text(UI_GREEN, 78, 181);
-    gfx_PrintString("2ND: DESCEND   CLEAR: ABORT");
+    gfx_PrintString(saved ? "2ND: NEW   GRAPH: CONTINUE" : "2ND: NEW GAME   CLEAR: ABORT");
     gfx_SwapDraw();
 
     for (;;) {
@@ -1230,79 +1561,415 @@ static uint8_t wait_for_deploy(void) {
         kb_Scan();
         current = (uint8_t)(
             ((kb_Data[1] & kb_2nd) != 0u ? 1u : 0u) |
-            ((kb_Data[6] & kb_Clear) != 0u ? 2u : 0u)
+            ((kb_Data[1] & kb_Graph) != 0u ? 2u : 0u) |
+            ((kb_Data[6] & kb_Clear) != 0u ? 4u : 0u)
         );
         if ((current & 1u) != 0u && (previous & 1u) == 0u) return 1u;
-        if ((current & 2u) != 0u) return 0u;
+        if (saved && (current & 2u) != 0u && (previous & 2u) == 0u) return 2u;
+        if ((current & 4u) != 0u) return 0u;
         previous = current;
     }
 }
 
-static uint8_t add_cabin_box(
-    fixed_t x,
-    fixed_t y,
-    fixed_t z,
-    fixed_t half_x,
-    fixed_t half_y,
-    fixed_t half_z,
-    uint8_t color
-) {
-    return engine_spawn_static_box(
-        (Vec3){x, y, z},
-        (Vec3){half_x, half_y, half_z},
-        CABIN_ROOM,
-        color
+static void setup_exterior_camera(void) {
+    cabin_camera.position.x = exterior_world_from_map(
+        (uint16_t)(lung.precise_x >> NAV_SHIFT)
     );
+    cabin_camera.position.y = exterior_world_from_map(
+        (uint16_t)(lung.precise_y >> NAV_SHIFT)
+    );
+    cabin_camera.position.z = 330;
+    cabin_camera.velocity = (Vec3){0, 0, 0};
+    cabin_camera.room = EXTERIOR_ROOM;
+    cabin_camera.yaw = heading_angle();
+    cabin_camera.pitch = 0;
+    cabin_camera.dev_mode = 1u;
+    cabin_camera.noclip = 1u;
+    rebuild_basis(&cabin_camera);
 }
 
-/* Twenty world-space rectangular meshes form the cabin.  Every visible
- * station now passes through T3D3's camera transform, near clipping, face
- * shading, depth sort, and material texture pass; none of these pieces can
- * address framebuffer memory from an off-screen UI coordinate. */
-static uint8_t build_cabin_mesh(void) {
-    uint8_t pipe;
+/* Build only the cave cells around the camera, like small Minecraft chunks.
+   Their absolute map positions mean moving the sub produces a different 3D
+   location instead of rebuilding the same local tunnel in front of it. */
+static uint8_t spawn_interest_model(uint8_t scene) {
+    typedef struct {
+        int16_t side;
+        int16_t forward;
+        int16_t z;
+        uint8_t half_x;
+        uint8_t half_y;
+        uint8_t half_z;
+    } SitePiece;
+    /* A marked site must fit inside one photograph.  This is a real 16-part
+       low-poly silhouette (tower, legs, cross-braces, antenna and annex), not
+       the former six generic blocks. */
+    static const SitePiece pieces[] = {
+        {0, 0, 445, 52, 52, 150},
+        {-118, -92, 260, 20, 20, 175}, {118, -92, 260, 20, 20, 175},
+        {-118, 92, 260, 20, 20, 175}, {118, 92, 260, 20, 20, 175},
+        {-72, -65, 355, 82, 16, 16}, {72, 65, 440, 82, 16, 16},
+        {-72, 65, 525, 82, 16, 16}, {72, -65, 610, 82, 16, 16},
+        {0, 0, 680, 25, 25, 100},
+        {0, 0, 820, 12, 12, 55},
+        {-200, 40, 300, 72, 58, 72}, {200, -40, 300, 72, 58, 72},
+        {-210, 40, 405, 45, 38, 36}, {210, -40, 405, 45, 38, 36},
+        {0, -175, 260, 145, 35, 38}
+    };
+    const fixed_t distance = (fixed_t)(PHOTO_RENDER_DISTANCE * 2u / 3u);
+    const fixed_t scale = (fixed_t)(FIXED_ONE + (scene % 3u) * 28u);
+    Vec3 base = {
+        cabin_camera.position.x + fixed_mul(cabin_camera.forward.x, distance),
+        cabin_camera.position.y + fixed_mul(cabin_camera.forward.y, distance),
+        0
+    };
+    uint8_t index;
 
-    engine_static_scene_reset();
-    if (!add_cabin_box(0, 620, 145, 520, 210, 145, UI_RED_DARK) ||
-        !add_cabin_box(0, 455, 312, 500, 55, 28, UI_BROWN_DARK) ||
-        !add_cabin_box(0, 1090, 500, 255, 26, 268, UI_RED) ||
-        !add_cabin_box(0, 1055, 500, 210, 18, 220, UI_BROWN_DARK) ||
-        !add_cabin_box(-350, 1025, 520, 46, 34, 188, UI_GREEN_DARK) ||
-        !add_cabin_box(350, 1025, 520, 46, 34, 188, UI_GREEN) ||
-        !add_cabin_box(0, 405, 365, 306, 24, 54, UI_GREEN_DARK) ||
-        !add_cabin_box(0, -1070, 540, 292, 36, 212, UI_RED) ||
-        !add_cabin_box(0, -1028, 540, 246, 18, 162, UI_BLACK) ||
-        !add_cabin_box(-365, -930, 310, 70, 72, 70, UI_GREEN) ||
-        !add_cabin_box(430, -920, 300, 58, 66, 188, UI_RED) ||
-        !add_cabin_box(0, 0, 846, 112, 175, 28, UI_WHITE)) {
-        return 0u;
-    }
-
-    for (pipe = 0u; pipe < 3u; ++pipe) {
-        fixed_t height = (fixed_t)(190 + pipe * 250);
-        uint8_t color = pipe == 1u ? UI_RED : UI_RED_DARK;
-
-        if (!add_cabin_box(-775, 0, height, 24, 920, 38, color) ||
-            !add_cabin_box(775, 0, height, 24, 920, 38, color)) {
-            return 0u;
-        }
-    }
-    if (!add_cabin_box(744, 30, 470, 25, 285, 220, UI_BROWN) ||
-        !add_cabin_box(712, 30, 470, 12, 246, 182, UI_FLOOR)) {
-        return 0u;
+    for (index = 0u; index < sizeof(pieces) / sizeof(pieces[0]); ++index) {
+        fixed_t side = fixed_mul((fixed_t)pieces[index].side, scale);
+        fixed_t forward = fixed_mul((fixed_t)pieces[index].forward, scale);
+        if (!engine_spawn_static_box(
+                (Vec3){base.x + fixed_mul(cabin_camera.right.x, side) +
+                           fixed_mul(cabin_camera.forward.x, forward),
+                       base.y + fixed_mul(cabin_camera.right.y, side) +
+                           fixed_mul(cabin_camera.forward.y, forward),
+                       fixed_mul((fixed_t)pieces[index].z, scale)},
+                (Vec3){pieces[index].half_x, pieces[index].half_y,
+                       pieces[index].half_z}, EXTERIOR_ROOM, UI_WHITE)) return 0u;
     }
     return 1u;
 }
 
-static uint8_t initialize_game(void) {
+static uint8_t rebuild_exterior_chunks(
+    uint8_t scene, uint8_t debug_red, uint8_t include_subject
+) {
+    uint8_t center_x = coordinate_cell(exterior_map_from_world(cabin_camera.position.x));
+    uint8_t center_y = coordinate_cell(exterior_map_from_world(cabin_camera.position.y));
+    uint8_t ring;
+    uint8_t wall_count = 0u;
+
+    engine_static_scene_reset();
+
+    /* Stream a broad ring of map-aligned walls.  The 16-cell / 60-wall window
+       is twice the previous range, so freecam has no short-distance holes.
+       Sixteen boxes remain for a detailed marked-site silhouette. */
+    for (ring = 1u; ring <= EXTERIOR_CHUNK_RADIUS &&
+         wall_count < EXTERIOR_WALL_LIMIT; ++ring) {
+        int16_t y;
+        for (y = (int16_t)center_y - ring;
+             y <= (int16_t)center_y + ring && wall_count < EXTERIOR_WALL_LIMIT;
+             ++y) {
+            int16_t x;
+            for (x = (int16_t)center_x - ring;
+                 x <= (int16_t)center_x + ring && wall_count < EXTERIOR_WALL_LIMIT;
+                 ++x) {
+                uint16_t map_x_units;
+                uint16_t map_y_units;
+
+                if (x < 0 || y < 0 || x >= (int16_t)CAVE_SIZE ||
+                    y >= (int16_t)CAVE_SIZE ||
+                    (integer_absolute(x - center_x) != ring &&
+                     integer_absolute(y - center_y) != ring) ||
+                    cave_cell_open((uint8_t)x, (uint8_t)y)) continue;
+                map_x_units = (uint16_t)((uint24_t)x * MAP_LIMIT /
+                    (CAVE_SIZE - 1u));
+                map_y_units = (uint16_t)((uint24_t)y * MAP_LIMIT /
+                    (CAVE_SIZE - 1u));
+                if (!engine_spawn_static_box(
+                        (Vec3){exterior_world_from_map(map_x_units),
+                               exterior_world_from_map(map_y_units), 420},
+                        (Vec3){150, 150, 430}, EXTERIOR_ROOM,
+                        debug_red ? UI_RED : UI_WHITE)) return 0u;
+                ++wall_count;
+            }
+        }
+    }
+    if (include_subject && !spawn_interest_model(scene)) return 0u;
+    exterior_chunk_x = center_x;
+    exterior_chunk_y = center_y;
+    return 1u;
+}
+
+static uint8_t build_exterior_scene(
+    uint8_t scene, uint8_t debug_red, uint8_t include_subject
+) {
+    setup_exterior_camera();
+    engine_set_static_scene_only(1u);
+    if (!rebuild_exterior_chunks(scene, debug_red, include_subject)) return 0u;
+    return 1u;
+}
+
+static void draw_debug_view(void) {
+#if TI_LUNG_RAYCASTER
+    uint8_t ray;
+    const uint8_t ray_count = 80u;
+    const fixed_t step = 4 * FIXED_ONE;
+
+    gfx_FillScreen(UI_BLACK);
+    for (ray = 0u; ray < ray_count; ++ray) {
+        int8_t offset = (int8_t)ray - 40;
+        uint8_t angle = (uint8_t)(heading_angle() + offset);
+        fixed_t x = lung.x;
+        fixed_t y = lung.y;
+        fixed_t sine = angle_sine(angle);
+        fixed_t cosine = angle_sine((uint8_t)(angle + 64u));
+        uint8_t distance;
+
+        for (distance = 1u; distance < 180u; ++distance) {
+            int16_t map_x;
+            int16_t map_y;
+            /* Match navigation and proximity convention: heading zero is
+               positive map Y, while positive angles turn toward map X. */
+            x += fixed_mul(sine, step);
+            y += fixed_mul(cosine, step);
+            map_x = x >> FIXED_SHIFT;
+            map_y = y >> FIXED_SHIFT;
+            if (map_x < 0 || map_y < 0 || map_x > (int16_t)MAP_LIMIT ||
+                map_y > (int16_t)MAP_LIMIT || !cave_cell_open(
+                    coordinate_cell((uint16_t)map_x),
+                    coordinate_cell((uint16_t)map_y)
+                )) break;
+        }
+        {
+            uint8_t height = (uint8_t)(1500u / (distance + 6u));
+            uint8_t top;
+            if (height < 2u) height = 2u;
+            if (height > 170u) height = 170u;
+            top = (uint8_t)(109u - height / 2u);
+            gfx_SetColor(distance < 28u ? UI_RED : UI_RED_DARK);
+            gfx_FillRectangle_NoClip(ray * 4u, top, 4u, height);
+        }
+    }
+    {
+        uint8_t creature_index;
+        uint8_t view_angle = heading_angle();
+        fixed_t view_sine = angle_sine(view_angle);
+        fixed_t view_cosine = angle_sine((uint8_t)(view_angle + 64u));
+
+        for (creature_index = 0u; creature_index < 3u; ++creature_index) {
+            const SkeletalCreature *creature = &creatures[creature_index];
+            fixed_t dx;
+            fixed_t dy;
+            fixed_t forward;
+            fixed_t side;
+            int16_t screen_x;
+            uint8_t size;
+            uint8_t bone;
+
+            if (!creature->active) continue;
+            dx = creature->x - lung.x;
+            dy = creature->y - lung.y;
+            forward = fixed_mul(view_sine, dx) + fixed_mul(view_cosine, dy);
+            side = fixed_mul(view_cosine, dx) - fixed_mul(view_sine, dy);
+            if (forward <= 4 * FIXED_ONE || fixed_absolute(side) > forward)
+                continue;
+            screen_x = 160 + (int16_t)(((int32_t)side * 120) / forward);
+            if (screen_x < 24 || screen_x > 296) continue;
+            size = (uint8_t)(300u / (uint16_t)(forward >> FIXED_SHIFT));
+            if (size < 8u) size = 8u;
+            if (size > 38u) size = 38u;
+            gfx_SetColor(UI_WHITE);
+            gfx_Circle_NoClip(screen_x + size / 2u, 108, size / 3u);
+            gfx_SetColor(UI_BLACK);
+            gfx_FillCircle_NoClip(screen_x + size / 2u + 2, 105,
+                size > 18u ? 3u : 2u);
+            gfx_SetColor(UI_WHITE);
+            gfx_Line_NoClip(screen_x - size, 112, screen_x + size / 3u, 112);
+            for (bone = 0u; bone < 5u; ++bone) {
+                int16_t bx = screen_x - size + bone * (size / 3u + 2u);
+                gfx_Line_NoClip(bx, 112, bx - 3, 112 - size / 2u);
+                gfx_Line_NoClip(bx, 112, bx + 3, 112 + size / 2u);
+            }
+        }
+    }
+    if (debug_poi_index < 10u) {
+        const PhotoPoint *point = &photo_points[debug_poi_index];
+        fixed_t dx = point->x - lung.x;
+        fixed_t dy = point->y - lung.y;
+        fixed_t forward = fixed_mul(angle_sine((uint8_t)(heading_angle() + 64u)), dx) +
+            fixed_mul(angle_sine(heading_angle()), dy);
+        fixed_t side = -fixed_mul(angle_sine(heading_angle()), dx) +
+            fixed_mul(angle_sine((uint8_t)(heading_angle() + 64u)), dy);
+        if (forward > 4 * FIXED_ONE) {
+            int16_t screen_x = 160 + (int16_t)(((int32_t)side * 120) / forward);
+            uint8_t size = (uint8_t)(1200u / (uint16_t)(forward >> FIXED_SHIFT));
+            if (size > 70u) size = 70u;
+            if (size < 9u) size = 9u;
+            gfx_SetColor(UI_WHITE);
+            gfx_Line_NoClip(screen_x - size, 170, screen_x, 105 - size / 2u);
+            gfx_Line_NoClip(screen_x + size, 170, screen_x, 105 - size / 2u);
+            gfx_Line_NoClip(screen_x - size, 170, screen_x + size, 170);
+            gfx_Line_NoClip(screen_x - size / 2u, 148, screen_x + size / 2u, 148);
+            gfx_FillCircle_NoClip(screen_x, 128, size / 4u);
+        }
+    }
+    gfx_SetColor(UI_BLACK);
+    gfx_FillRectangle_NoClip(0, 218, 320, 22);
+    set_text(UI_WHITE, 5, 219);
+    gfx_PrintString("RAY TRACE EXIT ARROWS FLY PRGM POI");
+    set_text(UI_GREEN, 5, 230);
+    gfx_PrintString("RAYCAST OCEAN ");
+    if (debug_poi_index < 10u) gfx_PrintUInt(debug_poi_index + 1u, 2u);
+    else gfx_PrintString("--");
+    gfx_PrintString(" STAT BONE ");
+    if (debug_creature_index < 3u) {
+        gfx_PrintUInt(debug_creature_index + 1u, 1u);
+    } else {
+        gfx_PrintString("-");
+    }
+    gfx_SwapDraw();
+    return;
+#endif
+    ti_lung_engine_invalidate();
+    engine_render(&cabin_camera, displayed_fps_tenths);
+    gfx_SetColor(UI_BLACK);
+    gfx_FillRectangle_NoClip(0, 218, 320, 22);
+    set_text(UI_WHITE, 5, 219);
+    gfx_PrintString("TRACE EXIT ARROWS FLY 2ND UP MODE DOWN");
+    set_text(UI_GREEN, 5, 230);
+    gfx_PrintString("POI ");
+    if (debug_poi_index < 10u) {
+        const PhotoPoint *point = &photo_points[debug_poi_index];
+        gfx_PrintUInt(debug_poi_index + 1u, 2u);
+        gfx_PrintString(" X");
+        gfx_PrintUInt((uint16_t)(point->x >> FIXED_SHIFT), 1u);
+        gfx_PrintString(" Y");
+        gfx_PrintUInt((uint16_t)(point->y >> FIXED_SHIFT), 1u);
+        gfx_PrintString(" A");
+        print_heading_value(point->heading_cdeg);
+    } else {
+        gfx_PrintString("--");
+    }
+    set_text(UI_WHITE, 228, 230);
+    gfx_PrintString("PRGM NEXT");
+    gfx_SwapDraw();
+}
+
+static void debug_teleport_next_poi(void) {
+    const PhotoPoint *point;
+
+    debug_poi_index = (uint8_t)(debug_poi_index + 1u);
+    if (debug_poi_index >= 10u) debug_poi_index = 0u;
+    point = &photo_points[debug_poi_index];
+    lung.precise_x = (int32_t)point->x << (NAV_SHIFT - FIXED_SHIFT);
+    lung.precise_y = (int32_t)point->y << (NAV_SHIFT - FIXED_SHIFT);
+    lung.x = point->x;
+    lung.y = point->y;
+    lung.heading_cdeg = point->heading_cdeg;
+    lung.map_cursor_x = (uint16_t)(point->x >> FIXED_SHIFT);
+    lung.map_cursor_y = (uint16_t)(point->y >> FIXED_SHIFT);
+    lung.last_scene = point->scene;
+#if !TI_LUNG_RAYCASTER
+    setup_exterior_camera();
+    rebuild_exterior_chunks(point->scene, 1u, 1u);
+#endif
+}
+
+#if TI_LUNG_RAYCASTER
+static void update_ray_debug(
+    int8_t move_axis, int8_t turn_axis, uint24_t elapsed_ticks,
+    uint24_t ticks_per_second
+) {
+    int32_t travel;
+    uint8_t angle;
+    if (ticks_per_second == 0u) return;
+    if (turn_axis != 0) {
+        int24_t heading = (int24_t)lung.heading_cdeg + turn_axis * (int24_t)(
+            ((uint32_t)TURN_CDEG_PER_SECOND * elapsed_ticks) / ticks_per_second
+        );
+        while (heading < 0) heading += 36000;
+        while (heading >= 36000) heading -= 36000;
+        lung.heading_cdeg = (uint16_t)heading;
+    }
+    if (move_axis == 0) return;
+    travel = ((int32_t)(24 * NAV_ONE) * elapsed_ticks) / ticks_per_second;
+    angle = heading_angle();
+    lung.precise_x += move_axis * (((int32_t)angle_sine((uint8_t)(angle + 64u)) * travel) >> FIXED_SHIFT);
+    lung.precise_y += move_axis * (((int32_t)angle_sine(angle) * travel) >> FIXED_SHIFT);
+    if (lung.precise_x < 0) lung.precise_x = 0;
+    if (lung.precise_x > (int32_t)MAP_LIMIT * NAV_ONE) lung.precise_x = (int32_t)MAP_LIMIT * NAV_ONE;
+    if (lung.precise_y < 0) lung.precise_y = 0;
+    if (lung.precise_y > (int32_t)MAP_LIMIT * NAV_ONE) lung.precise_y = (int32_t)MAP_LIMIT * NAV_ONE;
+    sync_navigation_position();
+}
+#endif
+
+/* Trace mode needs free flight, not T3D3's full portal/body physics loop.
+   Keeping this controller local lets the linker discard that large subsystem
+   from the always-resident calculator program. */
+static void update_debug_camera(
+    int8_t move_axis,
+    int8_t turn_axis,
+    uint8_t rise,
+    uint8_t fall,
+    uint24_t elapsed_ticks,
+    uint24_t ticks_per_second
+) {
+    const fixed_t speed = 3600;
+    fixed_t travel;
+    uint8_t changed = 0u;
+
+    if (ticks_per_second == 0u) return;
+    if (turn_axis != 0) {
+        uint8_t step = (uint8_t)(((uint32_t)80u * elapsed_ticks +
+            ticks_per_second / 2u) / ticks_per_second);
+        if (step == 0u) step = 1u;
+        cabin_camera.yaw = (uint8_t)(cabin_camera.yaw + turn_axis * step);
+        rebuild_basis(&cabin_camera);
+        changed = 1u;
+    }
+    travel = (fixed_t)(((int32_t)speed * elapsed_ticks) / ticks_per_second);
+    if (move_axis != 0) {
+        cabin_camera.position.x += fixed_mul(cabin_camera.forward.x,
+            move_axis * travel);
+        cabin_camera.position.y += fixed_mul(cabin_camera.forward.y,
+            move_axis * travel);
+        changed = 1u;
+    }
+    if (rise != fall) {
+        cabin_camera.position.z += (rise ? travel : -travel);
+        changed = 1u;
+    }
+    if (!changed) return;
+    if (cabin_camera.position.x < EXTERIOR_WORLD_MIN + 64) {
+        cabin_camera.position.x = EXTERIOR_WORLD_MIN + 64;
+    }
+    if (cabin_camera.position.x > EXTERIOR_WORLD_MAX - 64) {
+        cabin_camera.position.x = EXTERIOR_WORLD_MAX - 64;
+    }
+    if (cabin_camera.position.y < EXTERIOR_WORLD_MIN + 64) {
+        cabin_camera.position.y = EXTERIOR_WORLD_MIN + 64;
+    }
+    if (cabin_camera.position.y > EXTERIOR_WORLD_MAX - 64) {
+        cabin_camera.position.y = EXTERIOR_WORLD_MAX - 64;
+    }
+    if (cabin_camera.position.z < 96) cabin_camera.position.z = 96;
+    if (cabin_camera.position.z > 2976) cabin_camera.position.z = 2976;
+    {
+        uint8_t chunk_x = coordinate_cell(
+            exterior_map_from_world(cabin_camera.position.x)
+        );
+        uint8_t chunk_y = coordinate_cell(
+            exterior_map_from_world(cabin_camera.position.y)
+        );
+        if (chunk_x != exterior_chunk_x || chunk_y != exterior_chunk_y) {
+            rebuild_exterior_chunks(
+                lung.last_scene == 0xFFu ? 0u : lung.last_scene,
+                1u, 0u
+            );
+        }
+    }
+}
+
+static uint8_t initialize_game(uint8_t continue_game) {
+#if !TI_LUNG_RAYCASTER
     if (!true3d_level_embedded_view(0u, &level) ||
         !engine_init(&cabin_camera, &level)) {
         return 0u;
     }
+#endif
     build_cave();
     memset(&lung, 0, sizeof(lung));
-    lung.x = 182 * FIXED_ONE + 77;
-    lung.y = 116 * FIXED_ONE + 182;
+    set_navigation_position(182u, 116u);
     lung.heading_cdeg = 0u;
     lung.oxygen = 4u;
     lung.pressure = 4u;
@@ -1310,20 +1977,54 @@ static uint8_t initialize_game(void) {
     lung.view = VIEW_CABIN;
     lung.map_cursor_x = 182u;
     lung.map_cursor_y = 116u;
+    debug_creature_index = 0xFFu;
 
+    memset(creatures, 0, sizeof(creatures));
+    creatures[0].phase = 0u;
+    creatures[0].speed = 3u;
+    creatures[0].radius = 11u;
+    creatures[0].kind = 0u;
+    creatures[1].phase = 85u;
+    creatures[1].speed = 2u;
+    creatures[1].radius = 27u;
+    creatures[1].kind = 1u;
+    creatures[2].phase = 170u;
+    creatures[2].speed = 1u;
+    creatures[2].radius = 43u;
+    creatures[2].kind = 2u;
+
+    if (continue_game && !load_saved_game(&lung)) return 0u;
+
+#if !TI_LUNG_RAYCASTER
     cabin_camera.position = (Vec3){0, -512, 384};
     cabin_camera.velocity = (Vec3){0, 0, 0};
     cabin_camera.room = CABIN_ROOM;
     cabin_camera.yaw = 64u;
     cabin_camera.pitch = 0;
     rebuild_basis(&cabin_camera);
-    if (!build_cabin_mesh()) return 0u;
+#endif
+    update_creatures();
     update_sensors();
     return 1u;
 }
 
-static void initialize_palette(void) {
-    engine_graphics_init();
+static void configure_ui_palette(void) {
+    /* TI Lung owns every palette slot it uses.  The stripped ray build does
+       not call T3D3's palette initializer, so relying on calculator residue
+       here caused the green/white helm corruption seen after a photo. */
+    gfx_palette[UI_BLACK] = gfx_RGBTo1555(0, 0, 0);
+    gfx_palette[UI_VOID] = gfx_RGBTo1555(4, 5, 12);
+    gfx_palette[UI_FLOOR] = gfx_RGBTo1555(22, 20, 24);
+    gfx_palette[UI_CEILING] = gfx_RGBTo1555(35, 30, 31);
+    gfx_palette[UI_GREEN] = gfx_RGBTo1555(25, 220, 92);
+    gfx_palette[UI_GREEN_DARK] = gfx_RGBTo1555(8, 108, 43);
+    gfx_palette[UI_BROWN] = gfx_RGBTo1555(86, 40, 25);
+    gfx_palette[UI_BROWN_DARK] = gfx_RGBTo1555(47, 23, 20);
+    gfx_palette[UI_RED] = gfx_RGBTo1555(210, 47, 36);
+    gfx_palette[UI_RED_DARK] = gfx_RGBTo1555(104, 23, 25);
+    gfx_palette[UI_BLUE] = gfx_RGBTo1555(26, 42, 112);
+    gfx_palette[UI_ORANGE] = gfx_RGBTo1555(220, 116, 30);
+    gfx_palette[UI_WHITE] = gfx_RGBTo1555(228, 232, 215);
     gfx_palette[UI_RUST] = gfx_RGBTo1555(78, 28, 20);
     gfx_palette[UI_RUST_LIGHT] = gfx_RGBTo1555(145, 57, 31);
     gfx_palette[UI_PAPER] = gfx_RGBTo1555(135, 137, 112);
@@ -1335,10 +2036,18 @@ static void initialize_palette(void) {
     gfx_palette[PHOTO_WHITE] = gfx_RGBTo1555(238, 235, 211);
 }
 
+static void initialize_palette(void) {
+#if !TI_LUNG_RAYCASTER
+    engine_graphics_init();
+#endif
+    configure_ui_palette();
+}
+
 int main(void) {
     clock_t previous_tick;
     uint24_t accumulated_ticks = 0u;
     const uint24_t update_ticks = (uint24_t)(CLOCKS_PER_SEC / UPDATE_RATE);
+    uint8_t start_mode;
 
     gfx_Begin();
     gfx_SetDrawBuffer();
@@ -1346,13 +2055,14 @@ int main(void) {
     gfx_SetTextBGColor(UI_BLACK);
     gfx_SetTextTransparentColor(UI_BLACK);
     kb_SetMode(MODE_3_CONTINUOUS);
-    if (!wait_for_deploy()) {
+    start_mode = wait_for_deploy();
+    if (start_mode == 0u) {
         kb_Reset();
         gfx_End();
         return 0;
     }
-    while ((kb_Data[1] & kb_2nd) != 0u) kb_Scan();
-    if (!initialize_game()) {
+    while ((kb_Data[1] & (kb_2nd | kb_Graph)) != 0u) kb_Scan();
+    if (!initialize_game((uint8_t)(start_mode == 2u))) {
         gfx_FillScreen(UI_BLACK);
         set_text(UI_RED, 80, 112);
         gfx_PrintString("PRESSURE SYSTEM FAILURE");
@@ -1362,6 +2072,7 @@ int main(void) {
         gfx_End();
         return 1;
     }
+    if (start_mode == 1u) save_current_game();
     /* Prime both GraphX buffers so the first idle cabin frame cannot expose
        remnants of the deployment/title screen. */
     draw_current_view();
@@ -1393,9 +2104,75 @@ int main(void) {
             continue;
         }
         if (lung.view == VIEW_PHOTO) {
-            if ((pressed & (EDGE_USE | EDGE_BRIEFING)) != 0u) {
+            if ((pressed & EDGE_USE) != 0u) {
+                /* Restore every engine/UI palette entry changed for the
+                   monochrome camera before the 2D helm draws again. */
+                initialize_palette();
                 lung.view = VIEW_CABIN;
                 draw_cabin();
+            }
+            continue;
+        }
+        if (lung.view == VIEW_DEBUG) {
+            if ((pressed & EDGE_DEBUG) != 0u) {
+                lung.view = VIEW_CABIN;
+                draw_cabin();
+                continue;
+            }
+            if ((kb_Data[4] & kb_Prgm) != 0u) {
+                if (!debug_prgm_held) {
+                    debug_teleport_next_poi();
+                    draw_debug_view();
+                }
+                debug_prgm_held = 1u;
+            } else {
+                debug_prgm_held = 0u;
+            }
+            if ((kb_Data[4] & kb_Stat) != 0u) {
+                if (!debug_stat_held) {
+                    debug_creature_index = (uint8_t)(debug_creature_index + 1u);
+                    if (debug_creature_index > 3u) debug_creature_index = 0u;
+                    if (debug_creature_index == 3u) {
+                        debug_creature_index = 0xFFu;
+                    } else {
+                        creatures[debug_creature_index].phase = heading_angle();
+                    }
+                    update_creatures();
+                    update_sensors();
+                    draw_debug_view();
+                }
+                debug_stat_held = 1u;
+            } else {
+                debug_stat_held = 0u;
+            }
+            if (accumulated_ticks >= update_ticks) {
+                int8_t forward = (int8_t)(
+                    ((kb_Data[7] & kb_Up) != 0u) -
+                    ((kb_Data[7] & kb_Down) != 0u)
+                );
+                int8_t turn = (int8_t)(
+                    ((kb_Data[7] & kb_Right) != 0u) -
+                    ((kb_Data[7] & kb_Left) != 0u)
+                );
+
+#if TI_LUNG_RAYCASTER
+                update_ray_debug(
+                    forward, turn, accumulated_ticks, (uint24_t)CLOCKS_PER_SEC
+                );
+#else
+                update_debug_camera(
+                    forward,
+                    turn,
+                    (uint8_t)((kb_Data[1] & kb_2nd) != 0u),
+                    (uint8_t)((kb_Data[1] & kb_Mode) != 0u),
+                    accumulated_ticks,
+                    (uint24_t)CLOCKS_PER_SEC
+                );
+#endif
+                update_creatures();
+                update_sensors();
+                draw_debug_view();
+                accumulated_ticks = 0u;
             }
             continue;
         }
@@ -1440,6 +2217,23 @@ int main(void) {
             draw_briefing();
             continue;
         }
+        if ((pressed & EDGE_DEBUG) != 0u) {
+            lung.view = VIEW_DEBUG;
+#if TI_LUNG_RAYCASTER
+            draw_debug_view();
+#else
+            if (!build_exterior_scene(
+                    lung.last_scene == 0xFFu ? 0u : lung.last_scene, 1u, 0u
+                )) {
+                lung.view = VIEW_CABIN;
+                set_message(MESSAGE_HULL_CONTACT, 45u);
+                draw_cabin();
+            } else {
+                draw_debug_view();
+            }
+#endif
+            continue;
+        }
         if ((pressed & EDGE_USE) != 0u) {
             use_station();
             if (lung.view != VIEW_CABIN) {
@@ -1461,27 +2255,14 @@ int main(void) {
             );
             uint8_t changed;
 
-            if (lung.helm_active) {
-                changed = update_navigation(
-                    forward,
-                    turn,
-                    accumulated_ticks,
-                    (uint24_t)CLOCKS_PER_SEC
-                );
-            } else if (forward != 0 || turn != 0) {
-                changed = engine_update(
-                    &cabin_camera,
-                    forward,
-                    turn,
-                    0,
-                    0u,
-                    0u,
-                    accumulated_ticks,
-                    (uint24_t)CLOCKS_PER_SEC
-                );
-            } else {
-                changed = 0u;
-            }
+            changed = update_navigation(
+                forward,
+                turn,
+                accumulated_ticks,
+                (uint24_t)CLOCKS_PER_SEC
+            );
+            update_creatures();
+            update_scripted_events();
             if (lung.fire_level != 0u) {
                 lung.hazard_ticks += 1u;
                 if (lung.hazard_ticks >= UPDATE_RATE * 5u) {
@@ -1494,7 +2275,18 @@ int main(void) {
                 --lung.message_ticks;
                 changed = 1u;
             }
-            if (changed) draw_cabin();
+            /* The sonar is a living instrument: redraw the cheap 2D helm at
+               the fixed update rate so its white proximity rings keep pulsing
+               even when the submarine is stationary. */
+            changed = 1u;
+            if (changed) {
+                ++lung.autosave_ticks;
+                if (lung.autosave_ticks >= UPDATE_RATE * 3u) {
+                    save_current_game();
+                    lung.autosave_ticks = 0u;
+                }
+                draw_current_view();
+            }
             accumulated_ticks = 0u;
         }
     }

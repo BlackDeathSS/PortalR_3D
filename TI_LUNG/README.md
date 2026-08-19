@@ -8,76 +8,50 @@ ripped game assets.
 
 ## Current game
 
-- A walkable, freely rotating polygon cabin rendered at 80 x 60 and presented
-  at 320 x 240.
-- Twenty world-space rectangular meshes form the console, welded hatch,
-  instrument strip, camera monitor/button, extinguisher, ceiling light, wall
-  map, and side pipes.
-- Palette face lighting, depth shading, sparse welded seams, and
-  coordinate-stable corrosion texture.
-- A 950 x 950 navigation chart with a movable coordinate cursor. `2nd` stores
-  the cursor as a waypoint, while the helm shows the selected X/Y target.
-- Four proximity rays (front, right, back, and left), solid cave collision,
-  heading and coordinate instruments, pressure, oxygen, leaks, and fire.
-- Ten survey coordinates with position and heading tolerances.
-- Camera charging, frozen developed photographs, coordinate/heading stamps,
-  noise, cave perspective derived from the current proximity rays, and
-  coordinate-seeded scenery so different positions do not reuse one image.
+- A full-screen 2D submarine helm with heading dial, precise coordinate
+  displays, four proximity returns, O2 and depth meters.
+- Q12 fixed-point navigation (1/4096 coordinate precision), avoiding the
+  calculator's expensive software floating point while making movement finer.
+- A 950 x 950 navigation chart with a movable coordinate cursor. It displays
+  the closest survey object's X/Y and required heading, plus an angle marker.
+- Solid cave collision: contacting a wall ends the run.
+- New Game / Continue with an autosaved AppVar state.
+- A white-flash-to-grain one-shot developed photo. The camera creates an
+  untextured, low-poly T3D3 exterior image once at a 30-unit render distance,
+  then leaves that framebuffer on screen until `2nd` returns to the helm.
+- `Trace` opens a noclip T3D3 exterior inspection view for debugging. It
+  streams a broad sixteen-cell radius of map-aligned cave chunks around freecam;
+  the exterior container itself is invisible.
 - Scripted proximity returns, impacts, navigation displacement, fire,
-  extinguisher interaction, pressure loss, a late camera encounter, and an
-  ending sequence.
-- FPS is always displayed in the upper-left corner.
+  pressure loss, a late camera encounter, and an ending sequence.
 
 ## Controls
 
 On the title screen:
 
-- `2nd`: descend and enter the cabin
+- `2nd`: begin a new run
+- `Graph`: continue an autosave, when one exists
 - `Clear`: abort
-
-Walking inside the cabin:
-
-- Arrow up/down: walk forward/backward
-- Arrow left/right: turn
-- `2nd`: use the station currently in front of you
-- `Graph`: open or close the map
-- `Mode`: open or close the briefing
-- `Clear`: exit
 
 At the helm:
 
 - Arrow up/down: move the submarine forward/backward
 - Arrow left/right: rotate the submarine
-- `2nd`: release the helm
+- `2nd`: take an external photo
+- `Graph`: open or close the map
+- `Mode`: open or close the briefing
+- `Trace`: toggle the 3D noclip debug view
+- `Clear`: exit
 
 On the map:
 
 - Arrow keys: move the coordinate cursor in five-unit steps
 - `2nd`: set the cursor as the helm waypoint
-- `Graph` or `Mode`: return to the cabin
+- `Graph` or `Mode`: return to the helm
 
-At the rear camera, face the camera station and press `2nd` to take a
-photograph. Press `2nd` or `Mode` to leave the developed photograph. During a
-fire, face the extinguisher station and press `2nd` repeatedly to suppress it.
-
-## Verified screens
-
-The screenshots below come from a headless CEmu run whose test sequence first
-presses and releases `2nd`, then verifies the game's view-state byte before
-exporting the LCD buffer.
-
-![Verified polygon cabin](tests/cemu/captures/verified-front-cabin-optimized.png)
-
-![Verified camera wall](tests/cemu/captures/verified-camera-angle-final.png)
-
-![Verified coordinate cursor and waypoint](tests/cemu/captures/verified-map-waypoint.png)
-
-![Verified developed photograph](tests/cemu/captures/verified-photo.png)
-
-The current captures report 9.8 FPS while facing the geometry-dense front
-console and 15.0 FPS at the camera wall. The first full-frame texture attempt
-dropped the same renderer to roughly 4 FPS, so the final material pass visits
-only sparse corrosion samples and four weld rows.
+In the debug view, arrow keys fly, `2nd` rises, `Mode` descends, `Prgm`
+cycles to the next point of interest at its exact coordinates and required
+heading, and `Trace` returns to the 2D helm.
 
 ## Renderer changes
 
@@ -114,15 +88,26 @@ make budget
 ```
 
 Transfer `bin/TILUNG.8xp` and the CE C libraries to the calculator. The current
-program is 43,093 bytes compressed. The memory audit budgets code, data, BSS,
-and a 4 KiB stack at 134,590 / 153,600 bytes, leaving 19,010 bytes.
+T3D3 package is 39,748 bytes; its memory audit budgets code, data, BSS, and a
+4 KiB stack at 103,640 / 153,600 bytes, leaving 49,960 bytes. The alternate
+raycaster package is 17,886 bytes and budgets 37,358 bytes, leaving 116,242.
 
 The deterministic tests in `tests/cemu` cover:
 
-- `front_cabin_autotest.json`: presses `2nd` and verifies the cabin state;
-- `camera_turn_autotest.json`: rotates through the formerly crashing camera
-  angle and verifies the program stays in the cabin;
-- `map_cursor_autotest.json`: opens the map, moves the cursor, stores a
-  waypoint, and remains in the map state;
-- `capture_photo_autotest.json`: reaches the rear camera, takes one exposure,
-  and verifies both the photograph state and exposure counter.
+- `front_cabin_autotest.json`: presses `2nd` and verifies the helm state.
+- `photo_still_autotest.json`: verifies the one-shot 3D photo buffers.
+- `low_ram_launch_autotest.json`: keeps a 35 KiB RAM AppVar resident, then
+  verifies that the game still launches.
+- `ray_trace_autotest.json`: verifies the portal-free raycaster and exact POI
+  teleport view using the same heading axes as navigation and proximity.
+- `skeletal_creature_autotest.json`: activates a moving skeletal return in
+  Trace and verifies that the camera develops its detailed bone silhouette.
+- `scripted_skeleton_autotest.json`: records the first two exact POIs and
+  verifies that the first story-driven skeletal encounter actually starts.
+
+Scripted skeletal encounters begin after 2, 5, and 8 marked photographs. The
+first is a close predatory fish, the second a long eel, and the third a large
+jawed organism. They continue moving while the submarine is idle, can produce
+real four-quadrant proximity returns, and only appear in a photograph while
+inside the camera's forward field of view. In Trace debug, press `STAT` to
+cycle fish, eel, giant maw, and off without changing the saved story flags.

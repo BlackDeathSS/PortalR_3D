@@ -1,0 +1,37 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/TI_LUNG/bin/TILRAY.8xp"
+  ],
+  "target": {"name": "TILRAY", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|450",
+    "hold|2nd", "delay|120", "release|2nd", "delay|700",
+
+    "hold|trace", "delay|120", "release|trace", "delay|180",
+    "hold|prgm", "delay|120", "release|prgm", "delay|180",
+    "hold|trace", "delay|120", "release|trace", "delay|180",
+    "hold|2nd", "delay|120", "release|2nd", "delay|700",
+    "hold|2nd", "delay|120", "release|2nd", "delay|180",
+
+    "hold|trace", "delay|120", "release|trace", "delay|180",
+    "hold|prgm", "delay|120", "release|prgm", "delay|180",
+    "hold|trace", "delay|120", "release|trace", "delay|180",
+    "hold|2nd", "delay|120", "release|2nd", "delay|700",
+    "hold|2nd", "delay|120", "release|2nd", "delay|150",
+
+    "hold|trace", "delay|90", "release|trace", "delay|20",
+    "hash|first_story_skeleton"
+  ],
+  "hashes": {
+    "first_story_skeleton": {
+      "description": "Two recorded POIs trigger the first moving skeletal encounter",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["C0655638"]
+    }
+  }
+}

@@ -141,6 +141,9 @@ uint8_t engine_update(
     uint24_t ticks_per_second
 );
 void engine_render(const EngineState *state, uint16_t fps_tenths);
+/* Render only spawned static scenery over the void. This is useful for
+ * exterior photo/debug views that must not show the enclosing room shell. */
+void engine_set_static_scene_only(uint8_t enabled);
 void engine_bodies_reset(void);
 uint8_t engine_spawn_body(
     Vec3 position,

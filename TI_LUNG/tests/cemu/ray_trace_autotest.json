@@ -1,0 +1,41 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/TI_LUNG/bin/TILRAY.8xp"
+  ],
+  "target": {"name": "TILRAY", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|450",
+    "hold|2nd",
+    "delay|120",
+    "release|2nd",
+    "delay|1800",
+    "hold|trace",
+    "delay|120",
+    "release|trace",
+    "delay|900",
+    "hash|ray_trace",
+    "hold|prgm",
+    "delay|120",
+    "release|prgm",
+    "delay|900",
+    "hash|ray_trace_poi"
+  ],
+  "hashes": {
+    "ray_trace": {
+      "description": "Portal-free DDA raycast ocean Trace view",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["B7C1E2D3"]
+    },
+    "ray_trace_poi": {
+      "description": "Ray Trace POI teleport updates the view",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["DB67A210"]
+    }
+  }
+}

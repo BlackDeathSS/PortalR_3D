@@ -1,0 +1,49 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/TI_LUNG/bin/TILRAY.8xp"
+  ],
+  "target": {"name": "TILRAY", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|450",
+    "hold|2nd",
+    "delay|120",
+    "release|2nd",
+    "delay|1200",
+    "hold|trace",
+    "delay|120",
+    "release|trace",
+    "delay|300",
+    "hold|stat",
+    "delay|120",
+    "release|stat",
+    "delay|20",
+    "hash|moving_bone_trace",
+    "hold|trace",
+    "delay|90",
+    "release|trace",
+    "delay|180",
+    "hold|2nd",
+    "delay|90",
+    "release|2nd",
+    "delay|900",
+    "hash|skeletal_photo"
+  ],
+  "hashes": {
+    "moving_bone_trace": {
+      "description": "STAT debug return projects a moving skeleton in Ray Trace",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["08A1F2E9"]
+    },
+    "skeletal_photo": {
+      "description": "Camera develops the visible creature as detailed bone structure",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["5254D588"]
+    }
+  }
+}

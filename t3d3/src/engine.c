@@ -35,13 +35,22 @@
 #define ROOM_CULL_HALF_HEIGHT 32
 #define PROJECTED_LIMIT 1048576L
 #define PROJECTION_TABLE_SHIFT 2
-#define PROJECTION_TABLE_SIZE 2048
-#define NEAR_PROJECTION_DEPTH_COUNT \
-    (PROJECTION_TABLE_SIZE << PROJECTION_TABLE_SHIFT)
+#ifndef T3D3_NEAR_PROJECTION_DEPTH_COUNT
+#define T3D3_NEAR_PROJECTION_DEPTH_COUNT 8192u
+#endif
+#ifndef T3D3_FAR_PROJECTION_TABLE_SIZE
+#define T3D3_FAR_PROJECTION_TABLE_SIZE 2048u
+#endif
+#ifndef T3D3_EDGE_RECIPROCAL_TABLE_SIZE
+#define T3D3_EDGE_RECIPROCAL_TABLE_SIZE 2048u
+#endif
+#define NEAR_PROJECTION_DEPTH_COUNT T3D3_NEAR_PROJECTION_DEPTH_COUNT
+#define NEAR_PROJECTION_TABLE_SIZE \
+    (NEAR_PROJECTION_DEPTH_COUNT >> PROJECTION_TABLE_SHIFT)
 #define FAR_PROJECTION_TABLE_SHIFT 5
 #define PROJECTION_SCALE_SHIFT 6
 #define EDGE_RECIPROCAL_SHIFT 4
-#define EDGE_RECIPROCAL_SIZE 2048
+#define EDGE_RECIPROCAL_SIZE T3D3_EDGE_RECIPROCAL_TABLE_SIZE
 #define EDGE_STEP_PRECISION_SHIFT 12
 #define NEAR_INTERSECTION_SHIFT 14
 
@@ -318,6 +327,7 @@ static T3D3Body bodies[BODY_STORAGE_SLOTS];
 static uint8_t body_sleep_ticks[BODY_STORAGE_SLOTS];
 static uint8_t active_body_count;
 static uint8_t held_body = NO_BODY;
+static uint8_t static_scene_only;
 
 #if T3D3_STATIC_BOX_LIMIT > 0
 typedef struct {
@@ -327,6 +337,13 @@ typedef struct {
 
 static StaticBox static_boxes[T3D3_STATIC_BOX_LIMIT];
 static uint8_t static_box_count;
+/* Static scenery is rendered only from the root camera, so this sorting and
+ * projection workspace need not live on the tiny calculator call stack. */
+static uint8_t static_box_order[T3D3_STATIC_BOX_LIMIT];
+static fixed_t static_box_depth[T3D3_STATIC_BOX_LIMIT];
+static CameraPoint static_box_center[T3D3_STATIC_BOX_LIMIT];
+static CameraPoint static_box_world_axis[T3D3_STATIC_BOX_LIMIT][3];
+static CameraPoint static_box_projected_extent[T3D3_STATIC_BOX_LIMIT];
 #endif
 
 static const Vec3 face_normals[ROOM_FACE_COUNT] = {
@@ -415,7 +432,7 @@ static RenderLayer render_layers[RENDER_LAYER_COUNT];
 static PortalClipSnapshot shared_portal_clip[PORTAL_COUNT];
 uint16_t low_row_offsets[RENDER_HEIGHT];
 static uint16_t projection_scale_table[NEAR_PROJECTION_DEPTH_COUNT];
-static uint16_t far_projection_scale_table[PROJECTION_TABLE_SIZE];
+static uint16_t far_projection_scale_table[T3D3_FAR_PROJECTION_TABLE_SIZE];
 static uint16_t edge_reciprocal_table[EDGE_RECIPROCAL_SIZE];
 uint8_t portal_lod_frame[PORTAL_LOD_STRIDE * PORTAL_LOD_HEIGHT];
 static uint8_t portal_lod_state[PORTAL_COUNT];
@@ -719,7 +736,9 @@ static uint16_t projection_scale_for_depth(fixed_t depth) {
 
     if (depth >= (fixed_t)NEAR_PROJECTION_DEPTH_COUNT) {
         index = (uint24_t)depth >> FAR_PROJECTION_TABLE_SHIFT;
-        if (index >= PROJECTION_TABLE_SIZE) index = PROJECTION_TABLE_SIZE - 1;
+        if (index >= T3D3_FAR_PROJECTION_TABLE_SIZE) {
+            index = T3D3_FAR_PROJECTION_TABLE_SIZE - 1u;
+        }
         return far_projection_scale_table[index];
     }
     return projection_scale_table[(uint24_t)depth];
@@ -3324,11 +3343,6 @@ static uint8_t static_box_camera_bounds_visible(
 }
 
 static void render_static_boxes(const Camera *camera, RenderLayer *layer) {
-    uint8_t order[T3D3_STATIC_BOX_LIMIT];
-    fixed_t depth[T3D3_STATIC_BOX_LIMIT];
-    CameraPoint center[T3D3_STATIC_BOX_LIMIT];
-    CameraPoint world_axis[T3D3_STATIC_BOX_LIMIT][3];
-    CameraPoint projected_extent[T3D3_STATIC_BOX_LIMIT];
     uint8_t count = 0u;
     uint8_t index;
 
@@ -3337,54 +3351,54 @@ static void render_static_boxes(const Camera *camera, RenderLayer *layer) {
         uint8_t insert;
 
         if (box->render_body.room != camera->room) continue;
-        center[index] = transform_point(camera, box->render_body.position);
+        static_box_center[index] = transform_point(camera, box->render_body.position);
         scale_camera_room_edges_exact(
             camera,
             box->half_extents.x,
             box->half_extents.y,
             box->half_extents.z,
-            world_axis[index]
+            static_box_world_axis[index]
         );
-        projected_extent[index].x =
-            fixed_absolute(world_axis[index][0].x) +
-            fixed_absolute(world_axis[index][1].x) +
-            fixed_absolute(world_axis[index][2].x);
-        projected_extent[index].y =
-            fixed_absolute(world_axis[index][0].y) +
-            fixed_absolute(world_axis[index][1].y) +
-            fixed_absolute(world_axis[index][2].y);
-        projected_extent[index].depth =
-            fixed_absolute(world_axis[index][0].depth) +
-            fixed_absolute(world_axis[index][1].depth) +
-            fixed_absolute(world_axis[index][2].depth);
+        static_box_projected_extent[index].x =
+            fixed_absolute(static_box_world_axis[index][0].x) +
+            fixed_absolute(static_box_world_axis[index][1].x) +
+            fixed_absolute(static_box_world_axis[index][2].x);
+        static_box_projected_extent[index].y =
+            fixed_absolute(static_box_world_axis[index][0].y) +
+            fixed_absolute(static_box_world_axis[index][1].y) +
+            fixed_absolute(static_box_world_axis[index][2].y);
+        static_box_projected_extent[index].depth =
+            fixed_absolute(static_box_world_axis[index][0].depth) +
+            fixed_absolute(static_box_world_axis[index][1].depth) +
+            fixed_absolute(static_box_world_axis[index][2].depth);
         if (!static_box_camera_bounds_visible(
-                &center[index],
-                &projected_extent[index]
+                &static_box_center[index],
+                &static_box_projected_extent[index]
             )) {
             continue;
         }
         insert = count;
         while (insert != 0u &&
-               depth[insert - 1u] < center[index].depth) {
-            order[insert] = order[insert - 1u];
-            depth[insert] = depth[insert - 1u];
+               static_box_depth[insert - 1u] < static_box_center[index].depth) {
+            static_box_order[insert] = static_box_order[insert - 1u];
+            static_box_depth[insert] = static_box_depth[insert - 1u];
             --insert;
         }
-        order[insert] = index;
-        depth[insert] = center[index].depth;
+        static_box_order[insert] = index;
+        static_box_depth[insert] = static_box_center[index].depth;
         ++count;
     }
 
     for (index = 0u; index < count; ++index) {
-        uint8_t box_index = order[index];
+        uint8_t box_index = static_box_order[index];
         const StaticBox *box = &static_boxes[box_index];
 
         render_body(
             &box->render_body,
             camera,
-            center[box_index],
-            world_axis[box_index],
-            &projected_extent[box_index],
+            static_box_center[box_index],
+            static_box_world_axis[box_index],
+            &static_box_projected_extent[box_index],
             layer,
             BODY_FLAT_LOD_DEPTH
         );
@@ -5090,7 +5104,7 @@ void engine_graphics_init(void) {
     present_frame_cache_valid[1] = 0;
 #endif
     configure_render_mode(0);
-    for (index = 0; index < PROJECTION_TABLE_SIZE; ++index) {
+    for (index = 0; index < NEAR_PROJECTION_TABLE_SIZE; ++index) {
         uint16_t scale;
 
         if (index < (NEAR_PLANE >> PROJECTION_TABLE_SHIFT)) {
@@ -5109,7 +5123,7 @@ void engine_graphics_init(void) {
     }
     for (index = NEAR_PROJECTION_DEPTH_COUNT >>
             FAR_PROJECTION_TABLE_SHIFT;
-         index < PROJECTION_TABLE_SIZE;
+         index < T3D3_FAR_PROJECTION_TABLE_SIZE;
          ++index) {
         far_projection_scale_table[index] = (uint16_t)(
             ((uint32_t)PROJECTION_FOCAL * FIXED_ONE *
@@ -5621,7 +5635,12 @@ void engine_render(const EngineState *state, uint16_t fps_tenths) {
         render_layers[0].row_left[row] = 0;
         render_layers[0].row_right[row] = active_render_width - 1;
     }
-    if (!render_fullscreen_portal(
+    if (static_scene_only) {
+        clear_render_layer(&render_layers[0], 0u);
+        render_layers[0].count = 0u;
+        render_layers[0].solid_count = 0u;
+        render_scene_objects(&camera, &render_layers[0]);
+    } else if (!render_fullscreen_portal(
             &camera,
             (uint8_t)(state->dev_mode && state->noclip)
         )) {
@@ -5651,4 +5670,8 @@ void engine_render(const EngineState *state, uint16_t fps_tenths) {
     RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_OVERLAY);
     draw_hud(fps_tenths, state->dev_mode);
     RENDER_BENCHMARK_SWITCH(TRUE3D_BENCH_ADMIN);
+}
+
+void engine_set_static_scene_only(uint8_t enabled) {
+    static_scene_only = enabled != 0u;
 }

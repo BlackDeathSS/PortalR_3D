@@ -1,0 +1,45 @@
+{
+  "rom": "C:/Users/Lance/Desktop/Calculator ROM/White_TI84.rom",
+  "transfer_files": [
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/clibs (1).8xg",
+    "C:/Users/Lance/Desktop/Platformer/PortalR_3D/TI_LUNG/bin/TILUNG.8xp"
+  ],
+  "target": {"name": "TILUNG", "isASM": true},
+  "delay_after_step": 0,
+  "sequence": [
+    "action|launch",
+    "delay|450",
+    "hold|2nd",
+    "delay|120",
+    "release|2nd",
+    "delay|900",
+    "hash|helm_fixed_octagon",
+    "hold|right",
+    "delay|1100",
+    "release|right",
+    "delay|300",
+    "hash|helm_next_45_sector",
+    "delay|300",
+    "hash|helm_proximity_blink_phase"
+  ],
+  "hashes": {
+    "helm_fixed_octagon": {
+      "description": "Helm shows a stationary octagon and close-range proximity set",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["D4ACF2EE"]
+    },
+    "helm_next_45_sector": {
+      "description": "Turning rotates front/right/rear/left into the matching fixed slots",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["17221AFC"]
+    },
+    "helm_proximity_blink_phase": {
+      "description": "Close proximity return changes phase instead of staying solid",
+      "start": "vram_start",
+      "size": "vram_8_size",
+      "expected_CRCs": ["CEEFFE03"]
+    }
+  }
+}
